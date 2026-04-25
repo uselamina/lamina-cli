@@ -1,0 +1,50 @@
+{
+  "name": "@uselamina/cli",
+  "version": "0.1.0",
+  "description": "CLI for Lamina — run AI image, video, and content generation workflows from your terminal",
+  "keywords": [
+    "lamina",
+    "cli",
+    "ai",
+    "image-generation",
+    "video-generation",
+    "content-creation",
+    "creative-engine",
+    "media",
+    "workflows",
+    "headless"
+  ],
+  "homepage": "https://docs.uselamina.ai",
+  "bugs": {
+    "url": "https://docs.uselamina.ai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/uselamina/lamina-cli.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "bin": {
+    "lamina": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "dependencies": {
+    "@uselamina/mcp": "0.1.0",
+    "@uselamina/sdk": "0.1.0"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "prepack": "npm run build",
+    "test": "npm run build && rm -rf dist-test && tsc -p tsconfig.test.json && node --test dist-test/__tests__/*.test.js"
+  }
+}
