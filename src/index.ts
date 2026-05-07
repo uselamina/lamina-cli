@@ -6,14 +6,16 @@ import { fileURLToPath } from 'node:url';
 
 import { handleAppsCommand } from './commands/apps.js';
 import { handleAssetsCommand } from './commands/assets.js';
-import { handleAuthCommand } from './commands/auth.js';
 import { handleContentCommand } from './commands/content.js';
 import { handleIntelligenceCommand } from './commands/intelligence.js';
+import { handleLoginCommand } from './commands/login.js';
+import { handleLogoutCommand } from './commands/logout.js';
 import { handleMcpCommand } from './commands/mcp.js';
 import { handlePublishingCommand } from './commands/publishing.js';
 import { handleRunCommand } from './commands/run.js';
 import { handleRunsCommand } from './commands/runs.js';
 import { handleWebhookCommand } from './commands/webhook.js';
+import { handleWhoamiCommand } from './commands/whoami.js';
 import { classifyError, EXIT, LaminaCliError, printCliError } from './lib/errors.js';
 import { printHelp, printVersion } from './lib/output.js';
 
@@ -47,23 +49,24 @@ function loadPackageVersions(): { cli: string; sdk: string } {
   return { cli, sdk };
 }
 
-// Common typos / muscle-memory invocations from other CLIs. We intercept
-// these and point users at the canonical command rather than dumping a bare
+// Common muscle-memory invocations from other CLIs. We intercept these and
+// point users at the canonical command rather than dumping a bare
 // "Unknown command" error.
 const MISTYPE_HINTS: Record<string, string> = {
-  login: 'auth login',
-  logout: 'auth logout',
-  whoami: 'auth status',
-  signin: 'auth login',
-  'sign-in': 'auth login',
-  signout: 'auth logout',
-  'sign-out': 'auth logout',
+  signin: 'login',
+  'sign-in': 'login',
+  signout: 'logout',
+  'sign-out': 'logout',
+  status: 'whoami',
+  'auth-status': 'whoami',
 };
 
 // Map subcommand names to their handlers. Used by the dispatcher AND by
 // `lamina help <subcommand>` so help routing is symmetric with execution.
 const COMMAND_HANDLERS: Record<string, (args: string[]) => Promise<void>> = {
-  auth: handleAuthCommand,
+  login: handleLoginCommand,
+  logout: handleLogoutCommand,
+  whoami: handleWhoamiCommand,
   apps: handleAppsCommand,
   assets: handleAssetsCommand,
   content: handleContentCommand,
