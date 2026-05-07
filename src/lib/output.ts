@@ -714,9 +714,7 @@ USAGE
   lamina <command> <subcommand> [flags]
 
 CORE COMMANDS
-  login         Authenticate the CLI (browser flow, --api-key for CI)
-  logout        Clear stored credentials
-  whoami        Show authenticated identity + auth source + base URL
+  auth          Authenticate the CLI (login / logout / status)
   apps          Discover and inspect apps in your workspace
   assets        Upload local files (images, videos, audio) to the CDN
   run           Run an app with explicit inputs
@@ -728,7 +726,7 @@ ADDITIONAL COMMANDS
   intelligence  Brand context, predictions, recommendations, trends
 
 EXAMPLES
-  $ lamina login
+  $ lamina auth login
   $ lamina apps list --search selfie
   $ lamina assets upload ./me.jpg
   $ lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 \
