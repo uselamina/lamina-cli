@@ -30,28 +30,18 @@ lamina --version
 Two paths, in priority order:
 
 ```bash
-# Interactive — opens your browser to the API-key page, then prompts for the key.
-# Saves to ~/.lamina/config.json (mode 0600).
-lamina auth login
+# Interactive — saves credentials to ~/.lamina/config.json
+lamina login
 
 # Or set the environment variable (overrides stored credentials)
 export LAMINA_API_KEY=lma_your_key
 ```
 
-For CI / scripted environments, pass the key inline (skips the browser):
-
-```bash
-lamina auth login --api-key lma_your_key
-```
-
 Generate API keys at <https://app.uselamina.ai/settings?tab=api>.
 
 ```bash
-# Confirm — shows identity, auth source, base URL, key fingerprint
-lamina auth status
-
-# Sign out (clears ~/.lamina/config.json)
-lamina auth logout
+# Confirm
+lamina whoami
 ```
 
 ## Quick start
@@ -83,9 +73,9 @@ on any command.
 
 | Command | What it does |
 |---|---|
-| `lamina auth login` | Authenticate (opens browser to the API-key page; `--api-key` for CI) |
-| `lamina auth logout` | Clear saved credentials |
-| `lamina auth status` | Show authenticated user, workspace, auth source, base URL, key fingerprint |
+| `lamina login` | Authenticate and save credentials |
+| `lamina logout` | Clear saved credentials |
+| `lamina whoami` | Show authenticated user + active workspace |
 | `lamina apps list` | Discover apps in your workspace + public catalog |
 | `lamina apps get <appId>` | Show full parameter spec for one app |
 | `lamina assets upload <path>` | Upload a local file to Lamina's CDN; returns a URL for run inputs |
