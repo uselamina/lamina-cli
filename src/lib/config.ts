@@ -2,13 +2,14 @@ import {
   DEFAULT_BASE_URL,
   LaminaClient,
   normalizeBaseUrl,
-  readStoredCredentials,
-  readStoredWebhookConfig,
   resolveApiKey,
   type LaminaClientOptions,
   type StoredLaminaCredentials,
   type StoredWebhookConfig,
 } from '@uselamina/sdk';
+import { readStoredCredentials, readStoredWebhookConfig } from '@uselamina/sdk/storage';
+
+import { EXIT, LaminaCliError } from './errors.js';
 
 export type AuthSource = 'explicit' | 'env' | 'stored';
 
@@ -76,9 +77,12 @@ export async function resolveAuthContext(options: {
     };
   }
 
-  throw new Error(
-    'No Lamina credentials found. Run `lamina login`, pass --api-key, or set LAMINA_API_KEY.'
-  );
+  throw new LaminaCliError({
+    code: 'auth_not_logged_in',
+    exitCode: EXIT.RUNTIME_ERROR,
+    message: 'Not logged in.',
+    suggestion: 'Run `lamina login` to authenticate, or set LAMINA_API_KEY.',
+  });
 }
 
 export async function createClientFromAuthContext(

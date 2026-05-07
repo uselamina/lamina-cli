@@ -1,65 +1,37 @@
-import { emitKeypressEvents } from 'node:readline';
-import { stdin as input, stdout as output } from 'node:process';
+/**
+ * Interactive prompts for the Lamina CLI.
+ *
+ * Uses `@clack/prompts` — a vetted, well-maintained library that handles
+ * masked input, terminal resize, paste, signal forwarding, and graceful
+ * cancellation across macOS / Linux / Windows. Replaces the earlier
+ * hand-rolled keypress implementation.
+ */
+import { isCancel, password as clackPassword } from '@clack/prompts';
 
-export async function prompt(question: string): Promise<string> {
-  output.write(question);
+import { EXIT, LaminaCliError } from './errors.js';
 
-  if (!input.isTTY) {
-    return new Promise<string>((resolve) => {
-      let buffer = '';
-      input.setEncoding('utf8');
-      input.once('data', (chunk) => {
-        buffer += chunk;
-        resolve(buffer.trim());
-      });
+/**
+ * Prompt for a Lamina API key in a masked input. Returns the trimmed key.
+ * Throws `LaminaCliError` if the user cancels (Ctrl+C) or enters an empty
+ * value.
+ */
+export async function promptApiKey(): Promise<string> {
+  const value = await clackPassword({
+    message: 'Paste your Lamina API key (or press Ctrl+C to cancel)',
+    validate: (input) => {
+      const trimmed = (input ?? '').trim();
+      if (!trimmed) return 'API key cannot be empty.';
+      return undefined;
+    },
+  });
+
+  if (isCancel(value)) {
+    throw new LaminaCliError({
+      code: 'invalid_argument',
+      exitCode: EXIT.INVALID_USAGE,
+      message: 'Login cancelled.',
     });
   }
 
-  emitKeypressEvents(input);
-  input.setRawMode(true);
-  input.resume();
-
-  return new Promise<string>((resolve, reject) => {
-    let value = '';
-
-    const cleanup = () => {
-      input.setRawMode(false);
-      input.pause();
-      input.off('keypress', onKeypress);
-      output.write('\n');
-    };
-
-    const onKeypress = (str: string, key: { name?: string; ctrl?: boolean; sequence?: string }) => {
-      if (key.ctrl && key.name === 'c') {
-        cleanup();
-        reject(new Error('Prompt cancelled.'));
-        return;
-      }
-
-      if (key.name === 'return' || key.name === 'enter') {
-        cleanup();
-        resolve(value.trim());
-        return;
-      }
-
-      if (key.name === 'backspace') {
-        if (value.length > 0) {
-          value = value.slice(0, -1);
-          output.write('\b \b');
-        }
-        return;
-      }
-
-      if (typeof str === 'string' && str.length > 0 && !key.ctrl) {
-        value += str;
-        output.write('*');
-      }
-    };
-
-    input.on('keypress', onKeypress);
-  });
-}
-
-export async function promptApiKey(): Promise<string> {
-  return prompt('Paste your Lamina API key: ');
+  return value.trim();
 }

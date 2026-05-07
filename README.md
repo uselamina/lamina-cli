@@ -1,44 +1,165 @@
 # `@uselamina/cli`
 
-Terminal interface for the Lamina public `/v1` API.
+The official Lamina command-line tool. Run AI image, video, and content
+generation from your terminal — discover apps, dispatch runs, plan from a
+brief, listen for webhooks, or expose Lamina to an LLM agent via MCP.
 
-Lamina is an agentic creative API for generating videos, movies, and images for products, brands, social, and ads. The CLI lets you discover apps, run executions, set up webhook listeners, and launch the MCP server -- all from the terminal.
+[Lamina](https://uselamina.ai) is an agentic creative API for generating
+videos, movies, and images for products, brands, social, and ads.
 
-**Use the CLI when:** you're prototyping, scripting, testing webhooks locally, or launching the MCP server for agent integration.
+> **Building an LLM agent integration?** The CLI is for humans and scripts.
+> If you're integrating Lamina into Claude Code, Cursor, or a custom MCP
+> client, connect your agent to the hosted MCP server at
+> `https://app.uselamina.ai/mcp/agent` (OAuth) — agents get typed tools
+> instead of CLI text parsing.
 
-See also: [`@uselamina/sdk`](https://github.com/uselamina/lamina-sdk) for programmatic Node.js/TypeScript integration, [`@uselamina/mcp`](https://github.com/uselamina/lamina-mcp) for direct agent tool access.
-
-## Install
+## Installation
 
 ```bash
 npm install -g @uselamina/cli
 ```
 
+Verify:
+
+```bash
+lamina --version
+```
+
+## Authentication
+
+Two paths, in priority order:
+
+```bash
+# Interactive — saves credentials to ~/.lamina/config.json
+lamina login
+
+# Or set the environment variable (overrides stored credentials)
+export LAMINA_API_KEY=lma_your_key
+```
+
+Generate API keys at <https://app.uselamina.ai/settings?tab=api>.
+
+```bash
+# Confirm
+lamina whoami
+```
+
 ## Quick start
 
 ```bash
-# Authenticate
-lamina login
+# Find an app for your task
+lamina apps list --search selfie
 
-# Discover apps
-lamina apps list --search catalog
-lamina apps get <appId>
+# Inspect its parameters
+lamina apps get e0124407-d57a-4f76-ac5a-be0041e55a24
 
-# Run an app and wait for results
-lamina run <appId> --file inputs.json --wait
+# Run it with explicit inputs and block until done
+lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 \
+  --input celebrity_text="Brad Pitt" \
+  --input your_photo_image_url="https://example.com/me.jpg" \
+  --wait
 
-# Set up a local webhook listener for testing
-lamina webhook serve --public-url https://example.ngrok.dev --save-default
-
-# Run with webhook delivery
-lamina run <appId> --file inputs.json --webhook default
-
-# Launch MCP server (for Claude, Cursor, etc.)
-lamina mcp serve
+# Or describe what you want and let the planner pick the app
+lamina content plan "a selfie with Tom Holland" --modality image
 ```
 
-## Docs
+## Commands
 
-- https://docs.uselamina.ai/guides/use-the-cli-and-sdk
-- https://docs.uselamina.ai/guides/test-webhooks-locally
-- https://docs.uselamina.ai/guides/agent-integration-patterns
+Run `lamina help <command>` (or `lamina <command> --help`) for full options
+on any command.
+
+| Command | What it does |
+|---|---|
+| `lamina login` | Authenticate and save credentials |
+| `lamina logout` | Clear saved credentials |
+| `lamina whoami` | Show authenticated user + active workspace |
+| `lamina apps list` | Discover apps in your workspace + public catalog |
+| `lamina apps get <appId>` | Show full parameter spec for one app |
+| `lamina run <appId>` | Run an app with explicit inputs |
+| `lamina runs get <runId>` | Snapshot of a run's status and outputs |
+| `lamina runs wait <runId>` | Block until a run reaches a terminal state |
+| `lamina content plan "<brief>"` | Plan and run from a natural-language brief |
+| `lamina content brief "<goal>"` | Generate concept ideas (no dispatch) |
+| `lamina content score` | Score this workspace's published content |
+| `lamina webhook listen` | Local HTTP listener that verifies + prints deliveries |
+| `lamina webhook signing-key` | Show this workspace's public signing keys |
+| `lamina webhook status` | Show the saved default forwarding URL |
+| `lamina webhook clear` | Clear the saved default forwarding URL |
+| `lamina intelligence brand-context` | Show workspace brand DNA, guidance, top patterns |
+| `lamina intelligence predict "<concept>"` | Predict content performance for a concept |
+| `lamina intelligence recommendations` | List actionable content recommendations |
+| `lamina intelligence trends` | Top / emerging / declining patterns by window |
+
+## Output
+
+Every command supports a `--json` flag that emits the raw API envelope, so
+you can pipe results into `jq` or another CLI without parsing formatted text:
+
+```bash
+lamina apps list --json | jq '.data[] | select(.modality == "image") | .appId'
+```
+
+## Configuration
+
+| Variable | Purpose |
+|---|---|
+| `LAMINA_API_KEY` | API key. Overrides credentials saved via `lamina login`. |
+| `LAMINA_BASE_URL` | Endpoint URL. Defaults to `https://app.uselamina.ai`. |
+
+Credentials are saved at `~/.lamina/config.json` (Unix file permissions).
+Webhook listener defaults are saved alongside.
+
+## Exit codes
+
+Modeled on POSIX conventions (`gh`, `git`, `vercel`).
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Runtime error — network, server, auth rejected, run failed |
+| `2` | Invalid usage — missing argument, unknown subcommand, bad flag |
+
+Errors print to stderr in a consistent shape so scripts can branch on
+exit code rather than parse stdout.
+
+## Webhooks
+
+Receive completion callbacks for app runs:
+
+```bash
+# Run a local listener that verifies signatures
+lamina webhook listen \
+  --public-url https://your-tunnel.example/lamina/webhook \
+  --save-default
+
+# Then dispatch with --webhook default
+lamina run <appId> --input ... --webhook default
+```
+
+Lamina signs webhooks with Ed25519. Inspect the public keys with
+`lamina webhook signing-key`.
+
+## MCP integration
+
+Lamina hosts an MCP (Model Context Protocol) server so LLM agents — Claude
+Code, Cursor, Windsurf, custom clients — can call Lamina's app catalog, run
+dispatch, and content planner as typed tools.
+
+Connect your MCP client to:
+
+```
+https://app.uselamina.ai/mcp/agent
+```
+
+Authentication is via OAuth. The exact client config shape depends on your
+MCP client; see your client's docs for adding a remote MCP server.
+
+## Documentation
+
+- [User guides](https://docs.uselamina.ai)
+- [CLI & SDK guide](https://docs.uselamina.ai/guides/use-the-cli-and-sdk)
+- [Webhook testing locally](https://docs.uselamina.ai/guides/test-webhooks-locally)
+- [Agent integration patterns](https://docs.uselamina.ai/guides/agent-integration-patterns)
+
+For programmatic Node.js / TypeScript integration without a shell, see
+[`@uselamina/sdk`](https://github.com/uselamina/lamina-sdk).
