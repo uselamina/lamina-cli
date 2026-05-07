@@ -53,10 +53,13 @@ lamina apps list --search selfie
 # Inspect its parameters
 lamina apps get e0124407-d57a-4f76-ac5a-be0041e55a24
 
+# Upload a local image to Lamina's CDN (returns a URL you can pass into runs)
+URL=$(lamina assets upload ./me.jpg --json | jq -r '.data.url')
+
 # Run it with explicit inputs and block until done
 lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 \
   --input celebrity_text="Brad Pitt" \
-  --input your_photo_image_url="https://example.com/me.jpg" \
+  --input your_photo_image_url="$URL" \
   --wait
 
 # Or describe what you want and let the planner pick the app
@@ -75,6 +78,7 @@ on any command.
 | `lamina whoami` | Show authenticated user + active workspace |
 | `lamina apps list` | Discover apps in your workspace + public catalog |
 | `lamina apps get <appId>` | Show full parameter spec for one app |
+| `lamina assets upload <path>` | Upload a local file to Lamina's CDN; returns a URL for run inputs |
 | `lamina run <appId>` | Run an app with explicit inputs |
 | `lamina runs get <runId>` | Snapshot of a run's status and outputs |
 | `lamina runs wait <runId>` | Block until a run reaches a terminal state |

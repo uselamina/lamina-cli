@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { handleAppsCommand } from './commands/apps.js';
+import { handleAssetsCommand } from './commands/assets.js';
 import { handleContentCommand } from './commands/content.js';
 import { handleIntelligenceCommand } from './commands/intelligence.js';
 import { handleLoginCommand } from './commands/login.js';
@@ -67,6 +68,7 @@ const COMMAND_HANDLERS: Record<string, (args: string[]) => Promise<void>> = {
   logout: handleLogoutCommand,
   whoami: handleWhoamiCommand,
   apps: handleAppsCommand,
+  assets: handleAssetsCommand,
   content: handleContentCommand,
   intelligence: handleIntelligenceCommand,
   publishing: handlePublishingCommand,

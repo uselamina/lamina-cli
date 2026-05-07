@@ -2,6 +2,7 @@ import type {
   AccountResponse,
   AppDetail,
   AppSummary,
+  AssetUploadResult,
   BrandContextResponse,
   ConnectedChannel,
   ContentBriefResult,
@@ -186,6 +187,24 @@ export function printAppDetail(app: AppDetail): void {
       process.stdout.write(`    default: ${defaultStr}\n`);
     }
   }
+}
+
+export function printAssetUpload(data: AssetUploadResult & { sizeBytes?: number }): void {
+  process.stdout.write(`Uploaded: ${data.filename}\n`);
+  if (typeof data.sizeBytes === 'number' && data.sizeBytes > 0) {
+    process.stdout.write(`Size:     ${formatBytes(data.sizeBytes)}\n`);
+  }
+  process.stdout.write(`Type:     ${data.mediaType}\n`);
+  process.stdout.write(`URL:      ${data.url}\n`);
+  if (data.assetId) {
+    process.stdout.write(`Asset ID: ${data.assetId}\n`);
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export function printRunStarted(started: ExecutionStarted): void {
@@ -699,6 +718,7 @@ CORE COMMANDS
   logout        Sign out
   whoami        Show authenticated user + active workspace
   apps          Discover and inspect apps in your workspace
+  assets        Upload local files (images, videos, audio) to the CDN
   run           Run an app with explicit inputs
   runs          Inspect previously-started runs
   content       Plan and run from a natural-language brief
@@ -710,6 +730,7 @@ ADDITIONAL COMMANDS
 EXAMPLES
   $ lamina apps list --search selfie
   $ lamina apps get e0124407-d57a-4f76-ac5a-be0041e55a24
+  $ lamina assets upload ./me.jpg
   $ lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 --input celebrity_text="Brad Pitt" --wait
   $ lamina content plan "a selfie with Tom Holland" --modality image
   $ lamina webhook listen --public-url https://my-tunnel.example/lamina/webhook --save-default
