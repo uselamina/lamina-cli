@@ -728,6 +728,7 @@ ADDITIONAL COMMANDS
   intelligence  Brand context, predictions, recommendations, trends
 
 EXAMPLES
+  $ lamina login                                  # browser OAuth
   $ lamina apps list --search selfie
   $ lamina apps get e0124407-d57a-4f76-ac5a-be0041e55a24
   $ lamina assets upload ./me.jpg

@@ -10,6 +10,7 @@ import {
 import { readStoredCredentials, readStoredWebhookConfig } from '@uselamina/sdk/storage';
 
 import { EXIT, LaminaCliError } from './errors.js';
+import { refreshIfNeeded } from './tokenRefresh.js';
 
 export type AuthSource = 'explicit' | 'env' | 'stored';
 
@@ -67,13 +68,17 @@ export async function resolveAuthContext(options: {
     };
   }
 
-  const storedCredentials = options.storedCredentials ?? (await readStoredCredentials());
-  if (storedCredentials) {
+  const stored = options.storedCredentials ?? (await readStoredCredentials());
+  if (stored) {
+    // Preemptively refresh OAuth access tokens that are about to expire.
+    // For API-key credentials this is a no-op; for OAuth, it rotates the
+    // token and persists the new pair before any request goes out.
+    const refreshed = await refreshIfNeeded(stored);
     return {
-      apiKey: storedCredentials.apiKey,
-      baseUrl: normalizeBaseUrl(options.baseUrl || storedCredentials.baseUrl),
+      apiKey: refreshed.apiKey,
+      baseUrl: normalizeBaseUrl(options.baseUrl || refreshed.baseUrl),
       source: 'stored',
-      storedCredentials,
+      storedCredentials: refreshed,
     };
   }
 

@@ -23,6 +23,12 @@ export const EXIT = {
 export type LaminaCliErrorCode =
   | 'auth_invalid_key'
   | 'auth_not_logged_in'
+  | 'auth_timeout'
+  | 'auth_denied'
+  | 'auth_invalid_callback'
+  | 'auth_state_mismatch'
+  | 'auth_dcr_failed'
+  | 'auth_token_exchange_failed'
   | 'invalid_argument'
   | 'network_unreachable'
   | 'not_found'

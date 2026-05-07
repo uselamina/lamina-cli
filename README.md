@@ -27,21 +27,36 @@ lamina --version
 
 ## Authentication
 
-Two paths, in priority order:
+Two paths, mirroring the convention used by `gh`, `supabase`, `vercel`,
+`firebase`:
 
 ```bash
-# Interactive — saves credentials to ~/.lamina/config.json
+# 1. Interactive (default) — opens your browser for an OAuth approval flow
+#    (Authorization Code + PKCE with a loopback redirect). No copy/paste of
+#    secrets. Saves tokens to ~/.lamina/config.json (mode 0600).
 lamina login
 
-# Or set the environment variable (overrides stored credentials)
+# 2. CI / scripted — pass an API key non-interactively (no browser).
+lamina login --api-key lma_your_key
+
+# Or use an environment variable for one-off CI runs (overrides stored creds):
 export LAMINA_API_KEY=lma_your_key
 ```
 
-Generate API keys at <https://app.uselamina.ai/settings?tab=api>.
+`lamina login` opens `app.uselamina.ai`, you pick a workspace and click
+*Approve*, the CLI receives the auth code on a loopback port, exchanges it
+for an access token + refresh token, and stores them. No keys to manage by
+hand for the human flow.
+
+Generate workspace API keys (for CI) at
+<https://app.uselamina.ai/settings?tab=api>.
 
 ```bash
-# Confirm
+# Confirm — shows identity, active workspace, and other workspace memberships
 lamina whoami
+
+# Sign out (clears ~/.lamina/config.json)
+lamina logout
 ```
 
 ## Quick start
@@ -73,7 +88,7 @@ on any command.
 
 | Command | What it does |
 |---|---|
-| `lamina login` | Authenticate and save credentials |
+| `lamina login` | Browser-based OAuth approval (default); `--api-key` for CI |
 | `lamina logout` | Clear saved credentials |
 | `lamina whoami` | Show authenticated user + active workspace |
 | `lamina apps list` | Discover apps in your workspace + public catalog |
@@ -107,7 +122,7 @@ lamina apps list --json | jq '.data[] | select(.modality == "image") | .appId'
 
 | Variable | Purpose |
 |---|---|
-| `LAMINA_API_KEY` | API key. Overrides credentials saved via `lamina login`. |
+| `LAMINA_API_KEY` | Workspace API key (or OAuth access token). Overrides credentials saved via `lamina login`. |
 | `LAMINA_BASE_URL` | Endpoint URL. Defaults to `https://app.uselamina.ai`. |
 
 Credentials are saved at `~/.lamina/config.json` (Unix file permissions).
