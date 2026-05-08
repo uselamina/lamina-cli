@@ -8,6 +8,7 @@ import {
   printPublishHistory,
   printTransferResult,
 } from '../lib/output.js';
+import { isJsonMode } from '../lib/outputMode.js';
 
 function printPublishingHelp(): void {
   process.stdout.write('Usage: lamina publishing <command>\n\n');
@@ -44,7 +45,7 @@ export async function handlePublishingCommand(args: string[]): Promise<void> {
 
     const response = await client.publishing.channels();
 
-    if (parsed.values.json) {
+    if (parsed.values.json || isJsonMode()) {
       printJson(response);
     } else {
       printChannels(response.data);
@@ -88,7 +89,7 @@ export async function handlePublishingCommand(args: string[]): Promise<void> {
       caption: parsed.values.caption,
     });
 
-    if (parsed.values.json) {
+    if (parsed.values.json || isJsonMode()) {
       printJson(response);
     } else {
       printPublishResult(response.data);
@@ -130,7 +131,7 @@ export async function handlePublishingCommand(args: string[]): Promise<void> {
       filename: parsed.values.filename,
     });
 
-    if (parsed.values.json) {
+    if (parsed.values.json || isJsonMode()) {
       printJson(response);
     } else {
       printTransferResult(response.data);
@@ -163,7 +164,7 @@ export async function handlePublishingCommand(args: string[]): Promise<void> {
       limit: parsed.values.limit ? Number.parseInt(parsed.values.limit, 10) : undefined,
     });
 
-    if (parsed.values.json) {
+    if (parsed.values.json || isJsonMode()) {
       printJson(response);
     } else {
       printPublishHistory(response.data);

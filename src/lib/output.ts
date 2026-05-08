@@ -713,9 +713,11 @@ export function printHelp(): void {
 USAGE
   lamina <command> <subcommand> [flags]
 
-AGENT SETUP
-  init          Install the Lamina skill into this project for AI agents
-  docs          Search Lamina docs from the terminal
+AGENT SETUP — run \`lamina init\` first
+  init          Install the Lamina skill into this project. DO THIS FIRST
+                so AI coding agents (Claude Code, Cursor, etc.) auto-load
+                the canonical Lamina flow + rules. Idempotent; safe to re-run.
+  docs          Search Lamina docs from the terminal (no browser needed).
 
 CORE COMMANDS
   login         Authenticate with Lamina
@@ -765,7 +767,11 @@ LEARN MORE
 `);
 }
 
-export function printVersion(cliVersion: string, sdkVersion: string): void {
+export function printVersion(
+  cliVersion: string,
+  sdkVersion: string,
+  updateAvailable: string | null = null,
+): void {
   // Format mirrors `gh --version`: tool version on first line, dependency
   // versions on subsequent lines. Critical info for bug reports.
   const platform = `${process.platform} ${process.arch}`;
@@ -773,4 +779,25 @@ export function printVersion(cliVersion: string, sdkVersion: string): void {
   process.stdout.write(`lamina ${cliVersion}\n`);
   process.stdout.write(`@uselamina/sdk ${sdkVersion}\n`);
   process.stdout.write(`node ${nodeVer} (${platform})\n`);
+  if (updateAvailable) {
+    process.stdout.write(
+      `\n(update) lamina ${updateAvailable} is available. Run: npm install -g @uselamina/cli@latest\n`,
+    );
+  }
+}
+
+export function printVersionJson(
+  cliVersion: string,
+  sdkVersion: string,
+  updateAvailable: string | null = null,
+): void {
+  process.stdout.write(
+    `${JSON.stringify({
+      cli: cliVersion,
+      sdk: sdkVersion,
+      node: process.version,
+      platform: `${process.platform} ${process.arch}`,
+      update_available: updateAvailable,
+    }, null, 2)}\n`,
+  );
 }

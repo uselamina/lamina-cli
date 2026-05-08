@@ -7,6 +7,7 @@ import type { AssetMediaType } from '@uselamina/sdk';
 import { createClientFromAuthContext } from '../lib/config.js';
 import { EXIT, LaminaCliError } from '../lib/errors.js';
 import { printAssetUpload, printJson } from '../lib/output.js';
+import { isJsonMode } from '../lib/outputMode.js';
 
 const GROUP_HELP = `Usage: lamina assets <subcommand>
 
@@ -220,7 +221,7 @@ async function handleUpload(args: string[]): Promise<void> {
     mediaType,
   });
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson({ data: { ...result, sizeBytes: fileSize } });
     return;
   }

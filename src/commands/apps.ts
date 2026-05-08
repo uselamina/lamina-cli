@@ -16,9 +16,11 @@
  */
 import { parseArgs } from 'node:util';
 
+import { maybePrintBootstrapHint } from '../lib/bootstrap.js';
 import { createClientFromAuthContext } from '../lib/config.js';
 import { classifyError, EXIT, LaminaCliError } from '../lib/errors.js';
 import { printAppDetail, printAppList, printJson } from '../lib/output.js';
+import { isJsonMode } from '../lib/outputMode.js';
 
 const APPS_HELP = `Usage: lamina apps <subcommand> [options]
 
@@ -144,12 +146,13 @@ async function handleList(args: string[]): Promise<void> {
     apps = apps.filter((a) => !a.isPublic);
   }
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson({ ...response, data: apps });
     return;
   }
 
   printAppList(apps);
+  await maybePrintBootstrapHint();
 }
 
 // ─── get ────────────────────────────────────────────────────────────────────
@@ -187,10 +190,11 @@ async function handleGet(args: string[]): Promise<void> {
     throw classifyError(err);
   }
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
     return;
   }
 
   printAppDetail(response.data);
+  await maybePrintBootstrapHint();
 }

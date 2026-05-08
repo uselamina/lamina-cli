@@ -11,7 +11,7 @@ description: >
   `lamina` commands.
 metadata:
   author: lamina-team
-  version: "0.5.0"
+  version: "0.5.1"
 ---
 
 # Lamina CLI: brand-aware AI media generation
@@ -24,9 +24,12 @@ automatically. This skill teaches you the canonical flow and the rules.
 
 ## Critical rules — follow these every time
 
-1. **Always pass `--json` when an agent will read the output.** Pretty-text
-   mode is for humans only. Every Lamina command that returns data supports
-   `--json`. Errors are also JSON when `--json` was passed, on stderr.
+1. **Output is JSON automatically when piped.** Since v0.5.1 the CLI
+   detects whether stdout is a TTY: if you're piping the output to `jq`
+   or another tool, you get JSON without typing `--json`. You CAN still
+   pass `--json` explicitly, and `LAMINA_OUTPUT=json` (env) forces JSON
+   even in a TTY. Errors emit JSON on stderr in JSON mode too — one
+   parser for success and failure.
 
 2. **Apps are the curated path. Always start with `lamina apps list --search
    "<keyword>" --json`.** Apps are workflows that a human author has tuned
@@ -42,10 +45,12 @@ automatically. This skill teaches you the canonical flow and the rules.
    what you pass as a `url`-typed parameter (e.g.
    `--input your_photo_image_url=<url>`).
 
-5. **Use `--wait` for short jobs.** It blocks until the run reaches a
-   terminal state and returns the outputs inline. For long-running video
-   work consider polling with `lamina runs wait <runId>` or saving a
-   webhook URL via `lamina webhook listen --save-default`.
+5. **Pick wait vs async by job duration.** `--wait` blocks the call until
+   the run completes (good for image jobs, ~5-30s). For long-running
+   video / 3D / audio work use `--async` (returns runId immediately) +
+   poll with `lamina runs wait <runId>`, or set up a webhook via
+   `lamina webhook listen --save-default`. `--wait` and `--async` are
+   mutually exclusive.
 
 6. **One Bash tool call per `lamina` command.** Each `lamina ...`
    invocation should be its own Bash tool call. No shell substitutions

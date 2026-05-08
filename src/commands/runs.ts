@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { createClientFromAuthContext } from '../lib/config.js';
 import { EXIT, LaminaCliError } from '../lib/errors.js';
 import { printExecution, printJson } from '../lib/output.js';
+import { isJsonMode } from '../lib/outputMode.js';
 
 const GROUP_HELP = `Usage: lamina runs <subcommand>
 
@@ -99,7 +100,7 @@ async function handleGet(args: string[]): Promise<void> {
 
   const { client } = await createClientFromAuthContext();
   const response = await client.runs.get(runId);
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else {
     printExecution(response.data);
@@ -148,7 +149,7 @@ async function handleWait(args: string[]): Promise<void> {
       : 240000,
   });
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else {
     printExecution(response.data);

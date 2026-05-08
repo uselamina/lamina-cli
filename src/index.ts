@@ -19,8 +19,9 @@ import { handleRunsCommand } from './commands/runs.js';
 import { handleWebhookCommand } from './commands/webhook.js';
 import { handleWhoamiCommand } from './commands/whoami.js';
 import { classifyError, EXIT, LaminaCliError, printCliError } from './lib/errors.js';
-import { printHelp, printVersion } from './lib/output.js';
-import { detectJsonModeFromArgs } from './lib/outputMode.js';
+import { printHelp, printVersion, printVersionJson } from './lib/output.js';
+import { detectJsonModeFromArgs, isJsonMode } from './lib/outputMode.js';
+import { getUpdateAvailable } from './lib/updateCheck.js';
 
 // Read CLI version from our own package.json and the ACTUALLY-INSTALLED SDK
 // version from node_modules. Reading from `dependencies` would only show the
@@ -98,10 +99,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  // `lamina version` / `--version` / `-v` — bug-report metadata.
+  // `lamina version` / `--version` / `-v` — bug-report metadata + update check.
   if (command === '--version' || command === '-v' || command === 'version') {
     const { cli, sdk } = loadPackageVersions();
-    printVersion(cli, sdk);
+    const updateAvailable = await getUpdateAvailable(cli);
+    if (isJsonMode()) {
+      printVersionJson(cli, sdk, updateAvailable);
+    } else {
+      printVersion(cli, sdk, updateAvailable);
+    }
     return;
   }
 

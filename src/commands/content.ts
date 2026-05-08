@@ -9,6 +9,7 @@ import {
   printExecution,
   printJson,
 } from '../lib/output.js';
+import { isJsonMode } from '../lib/outputMode.js';
 
 const GROUP_HELP = `Usage: lamina content <subcommand>
 
@@ -218,7 +219,7 @@ async function handlePlan(args: string[]): Promise<void> {
     planOnly: Boolean(parsed.values['plan-only']),
   });
 
-  if (parsed.values.json && !parsed.values.wait) {
+  if ((parsed.values.json || isJsonMode()) && !parsed.values.wait) {
     printJson(response);
     return;
   }
@@ -236,7 +237,7 @@ async function handlePlan(args: string[]): Promise<void> {
         ? Number.parseInt(parsed.values['timeout-ms'], 10)
         : 240000,
     });
-    if (parsed.values.json) {
+    if (parsed.values.json || isJsonMode()) {
       printJson(completed);
     } else {
       printExecution(completed.data, { appName: response.data.selectedApp?.name });
@@ -299,7 +300,7 @@ async function handleBrief(args: string[]): Promise<void> {
     brandProfileId: parsed.values['brand-profile-id'],
   });
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else {
     printContentBrief(response.data);
@@ -347,7 +348,7 @@ async function handleScore(args: string[]): Promise<void> {
     limit: parsed.values.limit ? Number.parseInt(parsed.values.limit, 10) : undefined,
   });
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else {
     printContentScore(response.data);

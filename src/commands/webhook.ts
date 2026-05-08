@@ -16,6 +16,7 @@ import {
   printWebhookEvent,
   printWebhookStatus,
 } from '../lib/output.js';
+import { isJsonMode } from '../lib/outputMode.js';
 
 const GROUP_HELP = `Usage: lamina webhook <subcommand>
 
@@ -158,7 +159,7 @@ async function handleSigningKey(args: string[]): Promise<void> {
   const { client } = await createClientFromAuthContext();
   const response = await client.webhooks.signingKey();
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
     return;
   }
@@ -275,7 +276,7 @@ async function handleListen(args: string[]): Promise<void> {
     path,
     publicUrl,
     onEvent: (event: LaminaWebhookListenerEvent) => {
-      if (parsed.values.json) {
+      if (parsed.values.json || isJsonMode()) {
         printJson(event);
       } else {
         printWebhookEvent(event);
@@ -295,7 +296,7 @@ async function handleListen(args: string[]): Promise<void> {
     });
   }
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(status);
   } else {
     printListenerStartup({

@@ -121,6 +121,8 @@ export function classifyError(err: unknown): LaminaCliError {
   return new LaminaCliError({
     code: 'unknown',
     message,
+    suggestion:
+      'If this looks like a CLI bug, run `lamina docs "<topic>"` for guidance, or update the CLI: `npm install -g @uselamina/cli@latest`.',
     cause: err,
   });
 }

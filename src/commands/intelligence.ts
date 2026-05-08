@@ -9,6 +9,7 @@ import {
   printRecommendations,
   printTrends,
 } from '../lib/output.js';
+import { isJsonMode } from '../lib/outputMode.js';
 
 const GROUP_HELP = `Usage: lamina intelligence <subcommand>
 
@@ -185,7 +186,7 @@ async function handleBrandContext(args: string[]): Promise<void> {
     topK: parsed.values['top-k'] ? Number.parseInt(parsed.values['top-k'], 10) : undefined,
   });
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else {
     printBrandContext(response.data);
@@ -264,7 +265,7 @@ async function handlePredict(args: string[]): Promise<void> {
     campaignId: parsed.values['campaign-id'],
   });
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else {
     printPrediction(response.data);
@@ -320,7 +321,7 @@ async function handleRecommendations(args: string[]): Promise<void> {
     limit: parsed.values.limit ? Number.parseInt(parsed.values.limit, 10) : undefined,
   });
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else {
     printRecommendations(response.data);
@@ -372,7 +373,7 @@ async function handleTrends(args: string[]): Promise<void> {
     limit: parsed.values.limit ? Number.parseInt(parsed.values.limit, 10) : undefined,
   });
 
-  if (parsed.values.json) {
+  if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else {
     printTrends(response.data);
