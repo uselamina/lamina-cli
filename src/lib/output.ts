@@ -713,6 +713,10 @@ export function printHelp(): void {
 USAGE
   lamina <command> <subcommand> [flags]
 
+AGENT SETUP
+  init          Install the Lamina skill into this project for AI agents
+  docs          Search Lamina docs from the terminal
+
 CORE COMMANDS
   login         Authenticate with Lamina
   logout        Sign out
@@ -728,13 +732,14 @@ ADDITIONAL COMMANDS
   intelligence  Brand context, predictions, recommendations, trends
 
 EXAMPLES
+  $ lamina init                                   # one-time agent setup
   $ lamina login                                  # browser OAuth
   $ lamina apps list --search selfie
   $ lamina apps get e0124407-d57a-4f76-ac5a-be0041e55a24
   $ lamina assets upload ./me.jpg
   $ lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 --input celebrity_text="Brad Pitt" --wait
+  $ lamina docs "webhook signing"
   $ lamina content plan "a selfie with Tom Holland" --modality image
-  $ lamina webhook listen --public-url https://my-tunnel.example/lamina/webhook --save-default
 
 ENVIRONMENT VARIABLES
   LAMINA_API_KEY    API key. Overrides credentials saved via \`lamina login\`.

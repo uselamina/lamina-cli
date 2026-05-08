@@ -1,6 +1,6 @@
 {
   "name": "@uselamina/cli",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "CLI for Lamina — run AI image, video, and content generation workflows from your terminal",
   "keywords": [
     "lamina",
@@ -43,7 +43,7 @@
     "@uselamina/sdk": "^0.5.1"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js",
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js && node scripts/copy-skills.mjs",
     "clean": "rm -rf dist",
     "prepack": "npm run build",
     "test": "npm run build && rm -rf dist-test && tsc -p tsconfig.test.json && node --test dist-test/__tests__/*.test.js"

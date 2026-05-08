@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { handleAppsCommand } from './commands/apps.js';
 import { handleAssetsCommand } from './commands/assets.js';
 import { handleContentCommand } from './commands/content.js';
+import { handleDocsCommand } from './commands/docs.js';
+import { handleInitCommand } from './commands/init.js';
 import { handleIntelligenceCommand } from './commands/intelligence.js';
 import { handleLoginCommand } from './commands/login.js';
 import { handleLogoutCommand } from './commands/logout.js';
@@ -18,6 +20,7 @@ import { handleWebhookCommand } from './commands/webhook.js';
 import { handleWhoamiCommand } from './commands/whoami.js';
 import { classifyError, EXIT, LaminaCliError, printCliError } from './lib/errors.js';
 import { printHelp, printVersion } from './lib/output.js';
+import { detectJsonModeFromArgs } from './lib/outputMode.js';
 
 // Read CLI version from our own package.json and the ACTUALLY-INSTALLED SDK
 // version from node_modules. Reading from `dependencies` would only show the
@@ -64,6 +67,8 @@ const MISTYPE_HINTS: Record<string, string> = {
 // Map subcommand names to their handlers. Used by the dispatcher AND by
 // `lamina help <subcommand>` so help routing is symmetric with execution.
 const COMMAND_HANDLERS: Record<string, (args: string[]) => Promise<void>> = {
+  init: handleInitCommand,
+  docs: handleDocsCommand,
   login: handleLoginCommand,
   logout: handleLogoutCommand,
   whoami: handleWhoamiCommand,
@@ -79,6 +84,12 @@ const COMMAND_HANDLERS: Record<string, (args: string[]) => Promise<void>> = {
 };
 
 async function main(): Promise<void> {
+  // Detect --json globally before any command-specific parsing. This way
+  // even pre-dispatch errors (unknown command, bad arg) emit JSON to stderr
+  // when the agent piped --json through. Each command handler also calls
+  // detectJsonModeFromArgs() defensively to handle direct invocation.
+  detectJsonModeFromArgs(process.argv.slice(2));
+
   const [command, ...args] = process.argv.slice(2);
 
   // Top-level help — `lamina`, `lamina help`, `lamina --help`, `lamina -h`.

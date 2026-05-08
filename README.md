@@ -59,6 +59,29 @@ lamina whoami
 lamina logout
 ```
 
+## Agent setup (Claude Code, Cursor, MCP clients)
+
+Run this once per project so AI coding agents learn how to use Lamina:
+
+```bash
+cd your-project
+lamina init
+```
+
+That drops `.claude/skills/lamina/SKILL.md` into the project. On the next
+session, Claude Code (and any agent reading the standard `.claude/skills/`
+location) auto-loads it. The agent then knows the canonical Lamina flow —
+which apps to discover first, how to inspect parameters, how to upload
+assets, how to run apps end-to-end — without further prompting.
+
+Re-run with `--force` after a CLI upgrade to refresh the skill content.
+
+```bash
+# Search Lamina docs from the terminal (no browser context-switch)
+lamina docs "webhook signing"
+lamina docs "OAuth refresh" --json
+```
+
 ## Quick start
 
 ```bash
@@ -88,6 +111,8 @@ on any command.
 
 | Command | What it does |
 |---|---|
+| `lamina init` | Install the Lamina agent skill into this project's `.claude/skills/lamina/` |
+| `lamina docs <query>` | Search Lamina docs from the terminal |
 | `lamina login` | Browser-based OAuth approval (default); `--api-key` for CI |
 | `lamina logout` | Clear saved credentials |
 | `lamina whoami` | Show authenticated user + active workspace |

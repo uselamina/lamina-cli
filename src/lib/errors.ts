@@ -126,12 +126,35 @@ export function classifyError(err: unknown): LaminaCliError {
 }
 
 /**
- * Print an error to stderr in the conventional form:
- *   Error: <message>
- *   <suggestion line>
- *   See: <docsUrl>
+ * Print an error to stderr.
+ *
+ * Format depends on output mode (set via `--json` flag, see `outputMode.ts`):
+ *
+ * - **Text mode** (default): conventional human-readable form:
+ *     Error: <message>
+ *     <suggestion line>
+ *     See: <docsUrl>
+ *
+ * - **JSON mode** (`--json` was passed): single-line JSON envelope:
+ *     {"error":"...","code":"...","hint":"...","exitCode":1}
+ *
+ * JSON mode lets agents that pipe stdout to a parser also pipe stderr to
+ * the same parser without switching formats based on success/failure.
  */
+import { isJsonMode } from './outputMode.js';
+
 export function printCliError(err: LaminaCliError): void {
+  if (isJsonMode()) {
+    const payload: Record<string, unknown> = {
+      error: err.message,
+      code: err.code,
+      exitCode: err.exitCode,
+    };
+    if (err.suggestion) payload.hint = err.suggestion;
+    if (err.docsUrl) payload.docsUrl = err.docsUrl;
+    process.stderr.write(`${JSON.stringify(payload)}\n`);
+    return;
+  }
   process.stderr.write(`Error: ${err.message}\n`);
   if (err.suggestion) {
     process.stderr.write(`${err.suggestion}\n`);
