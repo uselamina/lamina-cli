@@ -40,6 +40,25 @@ export async function resolveStoredWebhookUrl(
   );
 }
 
+/**
+ * Resolve the API base URL with a consistent precedence across all auth
+ * sources (explicit option > LAMINA_BASE_URL env > stored credential > built-in
+ * default). Centralizing this avoids the foot-gun where one auth path honored
+ * the env var and another silently didn't.
+ */
+function resolveBaseUrl(args: {
+  optionBaseUrl?: string;
+  env: NodeJS.ProcessEnv;
+  storedBaseUrl?: string | null;
+}): string {
+  const candidate =
+    args.optionBaseUrl ||
+    args.env.LAMINA_BASE_URL ||
+    args.storedBaseUrl ||
+    DEFAULT_BASE_URL;
+  return normalizeBaseUrl(candidate);
+}
+
 export async function resolveAuthContext(options: {
   apiKey?: string;
   baseUrl?: string;
@@ -52,7 +71,7 @@ export async function resolveAuthContext(options: {
   if (explicitKey) {
     return {
       apiKey: explicitKey,
-      baseUrl: normalizeBaseUrl(options.baseUrl),
+      baseUrl: resolveBaseUrl({ optionBaseUrl: options.baseUrl, env }),
       source: 'explicit',
       storedCredentials: null,
     };
@@ -62,7 +81,7 @@ export async function resolveAuthContext(options: {
   if (envKey) {
     return {
       apiKey: envKey,
-      baseUrl: normalizeBaseUrl(options.baseUrl || env.LAMINA_BASE_URL || DEFAULT_BASE_URL),
+      baseUrl: resolveBaseUrl({ optionBaseUrl: options.baseUrl, env }),
       source: 'env',
       storedCredentials: null,
     };
@@ -76,7 +95,11 @@ export async function resolveAuthContext(options: {
     const refreshed = await refreshIfNeeded(stored);
     return {
       apiKey: refreshed.apiKey,
-      baseUrl: normalizeBaseUrl(options.baseUrl || refreshed.baseUrl),
+      baseUrl: resolveBaseUrl({
+        optionBaseUrl: options.baseUrl,
+        env,
+        storedBaseUrl: refreshed.baseUrl,
+      }),
       source: 'stored',
       storedCredentials: refreshed,
     };

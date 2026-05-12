@@ -529,119 +529,122 @@ export function printPublishHistory(data: PublishHistoryItem[]): void {
   }
 }
 
-export function printContentPlan(data: ContentPlanResult): void {
-  // ── status line and unmatched short-circuit ─────────────────────────────
+/**
+ * Render a `lamina content plan` response.
+ *
+ * The response is always one of three terminal states:
+ *   • status='plan'      mode='app'     → catalog app picked
+ *   • status='plan'      mode='recipe'  → dynamic-planner recipe (no app fit)
+ *   • status='unmatched'                → nothing fits
+ *
+ * For mode='recipe', the recipe JSON is rendered and the file path where the
+ * CLI saved it (for `lamina run --recipe-file <path>`) is highlighted. The
+ * recipe-file save itself happens in the `handlePlan` command (output.ts is
+ * just rendering).
+ */
+export function printContentPlan(
+  data: ContentPlanResult,
+  options: { recipeFile?: string } = {}
+): void {
   if (data.status === 'unmatched') {
     process.stdout.write(`Status: unmatched\n`);
     if (data.reason) process.stdout.write(`Reason: ${data.reason}\n`);
+    if (data.errors && data.errors.length > 0) {
+      process.stdout.write(`Errors:\n`);
+      for (const err of data.errors) {
+        process.stdout.write(`  - ${err}\n`);
+      }
+    }
     return;
   }
 
-  if (data.status === 'dispatched') {
-    process.stdout.write(`Status:      dispatched\n`);
-    if (data.runId) process.stdout.write(`Run started: ${data.runId}\n`);
-    if (data.webhookEnabled) {
-      process.stdout.write(`Webhook:     enabled (POST on completion)\n`);
-    }
-  } else {
-    // needs_input
-    process.stdout.write(`Status:      needs_input\n`);
-  }
+  // status === 'plan'
+  process.stdout.write(`Status:      plan\n`);
 
-  // ── selected app/model block ────────────────────────────────────────────
-  if (data.selectedApp) {
-    // appId is null when the planner fell back to a freestyle model. Show
-    // the appId in parens only when it's a real catalog app.
-    if (data.selectedApp.appId) {
-      process.stdout.write(`App:         ${data.selectedApp.name} (${data.selectedApp.appId})\n`);
+  if (data.mode === 'app') {
+    process.stdout.write(`Mode:        app\n`);
+    process.stdout.write(`App:         ${data.selectedApp.name} (${data.selectedApp.appId})\n`);
+    if (data.selectedApp.rationale) {
+      process.stdout.write(`Why picked:  ${data.selectedApp.rationale}\n`);
+    }
+
+    const draftedKeys = Object.keys(data.draftedInputs);
+    if (draftedKeys.length > 0) {
+      process.stdout.write(`\nDrafted inputs (${draftedKeys.length}):\n`);
+      for (const key of draftedKeys) {
+        const value = data.draftedInputs[key];
+        const display = typeof value === 'string' ? value : JSON.stringify(value);
+        const truncated = display.length > 80 ? `${display.slice(0, 77)}…` : display;
+        process.stdout.write(`  ${key} = ${truncated}\n`);
+      }
+    }
+
+    if (data.warnings.length > 0) {
+      process.stdout.write(`\nWarnings (${data.warnings.length}):\n`);
+      for (const w of data.warnings) {
+        process.stdout.write(`  ${w.field}: ${w.message}\n`);
+      }
+    }
+
+    if (data.askUser.length > 0) {
+      process.stdout.write(`\nNeed from you (${data.askUser.length}):\n`);
+      for (const item of data.askUser) {
+        process.stdout.write(`  ${item.name}: ${item.question}\n`);
+      }
+      process.stdout.write(
+        `\nNext: collect answers, then dispatch:\n` +
+          `  lamina run ${data.selectedApp.appId} \\\n` +
+          `    --input <each drafted-key>=<value> \\\n` +
+          `    --input <each asked-name>=<answer> \\\n` +
+          `    --wait --json\n`
+      );
     } else {
-      process.stdout.write(`Using:       ${data.selectedApp.name}\n`);
+      process.stdout.write(
+        `\nReady to dispatch:\n` +
+          `  lamina run ${data.selectedApp.appId} \\\n` +
+          `    --input <each drafted-key>=<value> \\\n` +
+          `    --wait --json\n`
+      );
     }
-    if (data.selectedApp.purpose) {
-      process.stdout.write(`Purpose:     ${data.selectedApp.purpose}\n`);
-    }
-    process.stdout.write(
-      `Why picked:  ${data.selectedApp.rationale} (confidence ${data.selectedApp.confidence.toFixed(2)})\n`
-    );
+    return;
   }
 
-  // ── cost ────────────────────────────────────────────────────────────────
-  if (data.cost) {
-    const { expected, min, max } = data.cost;
-    if (min === expected && max === expected) {
-      process.stdout.write(`Cost:        ~${expected} credits\n`);
-    } else {
-      process.stdout.write(`Cost:        ~${expected} credits (range ${min}–${max})\n`);
-    }
+  // mode === 'recipe'
+  process.stdout.write(`Mode:        recipe (${data.modality})\n`);
+  const variantCount = data.recipe?.variants?.length ?? 0;
+  process.stdout.write(`Variants:    ${variantCount}\n`);
+  if (data.recipe?.reason) {
+    process.stdout.write(`Why:         ${data.recipe.reason}\n`);
+  }
+  if (options.recipeFile) {
+    process.stdout.write(`Recipe file: ${options.recipeFile}\n`);
   }
 
-  // ── brand context applied (if any) ──────────────────────────────────────
-  if (data.brandContext && data.brandContext.voiceAttributes.length > 0) {
-    process.stdout.write(`Brand voice: ${data.brandContext.voiceAttributes.join(', ')}\n`);
-  }
-  if (data.guidanceSummary && data.guidanceSummary.promptDirectives.length > 0) {
-    const n = data.guidanceSummary.promptDirectives.length;
-    process.stdout.write(`Guidance:    ${n} prompt directive${n === 1 ? '' : 's'} applied\n`);
-  }
-
-  // ── drafted inputs (filled from the brief) ──────────────────────────────
-  const draftedKeys = Object.keys(data.drafted);
-  if (draftedKeys.length > 0) {
-    process.stdout.write(`\nDrafted from brief (${draftedKeys.length}):\n`);
-    for (const key of draftedKeys) {
-      const value = data.drafted[key];
-      const display = typeof value === 'string' ? value : JSON.stringify(value);
-      const truncated = display.length > 80 ? `${display.slice(0, 77)}…` : display;
-      process.stdout.write(`  ${key} = ${truncated}\n`);
+  if (data.warnings.length > 0) {
+    process.stdout.write(`\nWarnings (${data.warnings.length}):\n`);
+    for (const w of data.warnings) {
+      process.stdout.write(`  ${w.field}: ${w.message}\n`);
     }
   }
 
-  // ── defaulted (workflow author defaults used) ───────────────────────────
-  const defaultedKeys = Object.keys(data.defaulted);
-  if (defaultedKeys.length > 0) {
-    process.stdout.write(`\nUsing workflow defaults (${defaultedKeys.length}):\n`);
-    for (const key of defaultedKeys) {
-      const value = data.defaulted[key];
-      const display = typeof value === 'string' ? value : JSON.stringify(value);
-      const truncated = display.length > 60 ? `${display.slice(0, 57)}…` : display;
-      process.stdout.write(`  ${key} = ${truncated}\n`);
-    }
-  }
-
-  // ── must-supply (the honest gaps) ───────────────────────────────────────
   if (data.askUser.length > 0) {
     process.stdout.write(`\nNeed from you (${data.askUser.length}):\n`);
     for (const item of data.askUser) {
-      process.stdout.write(`  ${item.key}  (${item.type})\n`);
-      if (item.purpose) process.stdout.write(`    purpose: ${item.purpose}\n`);
-      process.stdout.write(`    ask:     ${item.askUser}\n`);
+      process.stdout.write(`  ${item.name}: ${item.question}\n`);
     }
-  }
-
-  // ── follow-up hint ──────────────────────────────────────────────────────
-  if (data.status === 'dispatched' && data.runId) {
-    if (!data.webhookEnabled) {
-      // App runs use `lamina runs wait`; freestyle runs poll a different
-      // endpoint (`/v1/freestyle/:runId`) — surface the right path so the
-      // caller doesn't burn time on a 404.
-      if (data.runType === 'freestyle') {
-        process.stdout.write(
-          `\nFreestyle run — poll with the SDK: \`client.freestyle.wait("${data.runId}")\`\n`
-        );
-      } else {
-        process.stdout.write(`\nFollow with: lamina runs wait ${data.runId}\n`);
-      }
-    }
-  } else {
-    // needs_input
-    if (data.askUser.length === 0 && data.dispatchHint) {
-      // plan-only branch — preview without dispatching
-      process.stdout.write(`\nReady to run:\n  ${data.dispatchHint}\n`);
-    } else if (data.askUser.length > 0 && data.selectedApp) {
+    if (options.recipeFile) {
       process.stdout.write(
-        `\nNext: collect the inputs above, then run \`lamina run ${data.selectedApp.appId} --input <key>=<value>\`.\n`
+        `\nNext: collect answers, then dispatch:\n` +
+          `  lamina run --recipe-file ${options.recipeFile} \\\n` +
+          `    --input <each asked-name>=<answer> \\\n` +
+          `    --wait --json\n`
       );
     }
+  } else if (options.recipeFile) {
+    process.stdout.write(
+      `\nReady to dispatch:\n` +
+        `  lamina run --recipe-file ${options.recipeFile} --wait --json\n`
+    );
   }
 }
 

@@ -1,12 +1,16 @@
+import { randomBytes } from 'node:crypto';
+import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { createClientFromAuthContext, resolveStoredWebhookUrl } from '../lib/config.js';
+import { createClientFromAuthContext } from '../lib/config.js';
 import { EXIT, LaminaCliError } from '../lib/errors.js';
+import { parseInlineInputs } from '../lib/inputParser.js';
 import {
   printContentBrief,
   printContentPlan,
   printContentScore,
-  printExecution,
   printJson,
 } from '../lib/output.js';
 import { isJsonMode } from '../lib/outputMode.js';
@@ -29,26 +33,30 @@ Run \`lamina content <subcommand> --help\` for subcommand options.
 
 const PLAN_HELP = `Usage: lamina content plan "<brief>" [options]
 
-Send a brief to the planner. The agent picks the best app, drafts what it
-can from the brief, applies workspace brand context, and either:
+Send a brief to the content router agent. The agent picks the best app,
+drafts what it can from the brief + any \`--input\` values you provide,
+and either:
 
-  • Dispatches the run when nothing user-specific is missing (default), or
-  • Returns a list of inputs needed from the user when the brief alone
-    isn't sufficient (e.g. "your photo URL").
+  • Dispatches the run when nothing user-specific is missing, OR
+  • Returns "askUser" questions when the brief isn't enough yet (e.g. it
+    needs a photo URL, a product name, or a choice you should make).
 
-Pass --plan-only to never dispatch (preview-then-apply mode).
+When askUser is non-empty, ASK THE HUMAN for each item, then re-invoke
+this command with \`--input <name>=<value>\` for each answer. Loop until
+askUser is empty and a runId is returned.
 
 Options:
+  --input <name>=<value>     Provide a value for one of the agent's
+                             questions. Repeatable. The agent will relay
+                             the value to the matching app parameter and
+                             will NOT re-ask.
   --platform <name>          Target platform hint (e.g. instagram, tiktok).
-  --modality <kind>          Modality hint: image | video | audio | text.
+  --modality <kind>          Modality hint: image | video.
   --app-id <uuid>            Skip ranking and use this app directly.
   --brand-profile-id <uuid>  Apply a specific brand profile.
-  --campaign-id <uuid>       Scope guidance to a campaign.
-  --webhook <url>            Get a POST callback when the run completes
-                             (only used when the planner dispatches).
-  --plan-only                Never dispatch. Always return a plan.
-  --wait                     Block until the dispatched run reaches a
-                             terminal state. (Implies dispatch.)
+  --num-variants <n>         Variant count when the agent goes freestyle.
+  --webhook <url>            Get a POST callback when a run dispatches.
+  --wait                     Block until the dispatched run completes.
   --timeout-ms <ms>          Max wait time, default 240000 (with --wait).
   --interval-ms <ms>         Poll interval, default 2000 (with --wait).
   --json                     Emit the raw API envelope.
@@ -56,9 +64,9 @@ Options:
 
 Examples:
   lamina content plan "a selfie with Tom Holland" --modality image
-  lamina content plan "spring collection IG carousel" --platform instagram
-  lamina content plan "caption a product reel" --plan-only
-  lamina content plan "..." --webhook https://my-tunnel/lamina/webhook
+  lamina content plan "a selfie with Tom Holland" \\
+    --input your_photo_image_url=https://media.getmason.io/abc.jpg
+  lamina content plan "spring IG carousel" --platform instagram
 
 Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials.
 `;
@@ -151,16 +159,12 @@ async function handlePlan(args: string[]): Promise<void> {
     parsed = parseArgs({
       args,
       options: {
+        input: { type: 'string', multiple: true },
         platform: { type: 'string' },
         modality: { type: 'string' },
         'app-id': { type: 'string' },
         'brand-profile-id': { type: 'string' },
-        'campaign-id': { type: 'string' },
-        webhook: { type: 'string' },
-        'plan-only': { type: 'boolean' },
-        wait: { type: 'boolean' },
-        'timeout-ms': { type: 'string' },
-        'interval-ms': { type: 'string' },
+        'num-variants': { type: 'string' },
         json: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },
@@ -191,20 +195,11 @@ async function handlePlan(args: string[]): Promise<void> {
     });
   }
 
-  if (parsed.values.wait && parsed.values['plan-only']) {
-    throw new LaminaCliError({
-      code: 'invalid_argument',
-      exitCode: EXIT.INVALID_USAGE,
-      message: '--wait conflicts with --plan-only.',
-      suggestion: '--plan-only never starts a run, so there is nothing to wait on.',
-    });
-  }
+  const inlineInputs = parseInlineInputs(parsed.values.input || []);
+  const hasInputs = Object.keys(inlineInputs).length > 0;
 
-  const rawWebhook = parsed.values.webhook?.trim();
-  const webhookUrl =
-    rawWebhook === 'local' || rawWebhook === 'default'
-      ? (await resolveStoredWebhookUrl(rawWebhook)).webhookUrl
-      : rawWebhook;
+  const numVariantsRaw = parsed.values['num-variants'];
+  const numVariants = numVariantsRaw ? Number.parseInt(numVariantsRaw, 10) : undefined;
 
   const { client } = await createClientFromAuthContext();
 
@@ -214,35 +209,86 @@ async function handlePlan(args: string[]): Promise<void> {
     modality: parsed.values.modality,
     appId: parsed.values['app-id'],
     brandProfileId: parsed.values['brand-profile-id'],
-    campaignId: parsed.values['campaign-id'],
-    webhookUrl,
-    planOnly: Boolean(parsed.values['plan-only']),
+    inputs: hasInputs ? inlineInputs : undefined,
+    numVariants,
   });
 
-  if ((parsed.values.json || isJsonMode()) && !parsed.values.wait) {
-    printJson(response);
+  // For `mode: 'recipe'` responses, write the recipe JSON to a local file so
+  // the calling agent can dispatch it via `lamina run --recipe-file <path>`.
+  // Best-effort: log a warning if write fails but don't error — the recipe is
+  // also returned inline in the JSON response.
+  let recipeFile: string | undefined;
+  if (
+    response.data.status === 'plan' &&
+    response.data.mode === 'recipe' &&
+    response.data.recipe
+  ) {
+    try {
+      recipeFile = await writeRecipeFile(response.data.recipe);
+      // Best-effort cleanup of old recipe files (>24h).
+      void cleanupOldRecipes();
+    } catch (err) {
+      process.stderr.write(
+        `Warning: failed to write recipe to ~/.lamina/recipes/: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  if (parsed.values.json || isJsonMode()) {
+    // Include the recipeFile path in the JSON output if we wrote one.
+    const augmented = recipeFile
+      ? { ...response, data: { ...response.data, recipeFile } }
+      : response;
+    printJson(augmented);
     return;
   }
 
-  printContentPlan(response.data);
+  printContentPlan(response.data, { recipeFile });
+}
 
-  // --wait only meaningful when --dispatch fired a run.
-  if (parsed.values.wait && response.data.status === 'dispatched' && response.data.runId) {
-    process.stdout.write('\nWaiting for run to complete…\n\n');
-    const completed = await client.runs.wait(response.data.runId, {
-      intervalMs: parsed.values['interval-ms']
-        ? Number.parseInt(parsed.values['interval-ms'], 10)
-        : 2000,
-      timeoutMs: parsed.values['timeout-ms']
-        ? Number.parseInt(parsed.values['timeout-ms'], 10)
-        : 240000,
-    });
-    if (parsed.values.json || isJsonMode()) {
-      printJson(completed);
-    } else {
-      printExecution(completed.data, { appName: response.data.selectedApp?.name });
-    }
+// ─── Recipe file storage helpers ───────────────────────────────────────────
+//
+// When `lamina content plan` returns a recipe (no catalog app fit), we write
+// the recipe JSON to `~/.lamina/recipes/recipe-<date>-<id>.json` so the
+// calling agent can pass it to `lamina run --recipe-file <path>` for
+// deterministic dispatch via the existing `client.content.run({mode:
+// 'freestyle', ...})` SDK call. Files auto-clean after 24h.
+
+const RECIPES_DIR = join(homedir(), '.lamina', 'recipes');
+const RECIPE_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+
+async function writeRecipeFile(recipe: unknown): Promise<string> {
+  await mkdir(RECIPES_DIR, { recursive: true });
+  const today = new Date().toISOString().slice(0, 10);
+  const id = randomBytes(4).toString('hex');
+  const path = join(RECIPES_DIR, `recipe-${today}-${id}.json`);
+  await writeFile(path, JSON.stringify(recipe, null, 2), 'utf8');
+  return path;
+}
+
+async function cleanupOldRecipes(): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(RECIPES_DIR);
+  } catch {
+    return; // directory doesn't exist yet
   }
+  const now = Date.now();
+  await Promise.all(
+    entries
+      .filter((name) => name.startsWith('recipe-') && name.endsWith('.json'))
+      .map(async (name) => {
+        const full = join(RECIPES_DIR, name);
+        try {
+          const s = await stat(full);
+          if (now - s.mtimeMs > RECIPE_FILE_MAX_AGE_MS) {
+            await unlink(full);
+          }
+        } catch {
+          // best-effort
+        }
+      }),
+  );
 }
 
 async function handleBrief(args: string[]): Promise<void> {

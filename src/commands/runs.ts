@@ -140,18 +140,48 @@ async function handleWait(args: string[]): Promise<void> {
   }
 
   const { client } = await createClientFromAuthContext();
-  const response = await client.runs.wait(runId, {
+  const waitOptions = {
     intervalMs: parsed.values['interval-ms']
       ? Number.parseInt(parsed.values['interval-ms'], 10)
       : 2000,
     timeoutMs: parsed.values['timeout-ms']
       ? Number.parseInt(parsed.values['timeout-ms'], 10)
       : 240000,
-  });
+  };
+
+  // Polymorphic: a runId might belong to either an app workflow run
+  // (/v1/runs/<runId>) or a freestyle/recipe run (/v1/freestyle/<runId>).
+  // Try the app endpoint first; on 404 fall back to freestyle. Either way
+  // the agent gets one wait command to learn instead of branching by mode.
+  let response;
+  let isFreestyle = false;
+  try {
+    response = await client.runs.wait(runId, waitOptions);
+  } catch (err) {
+    if (isLikelyNotFound(err)) {
+      response = await client.freestyle.wait(runId, waitOptions);
+      isFreestyle = true;
+    } else {
+      throw err;
+    }
+  }
 
   if (parsed.values.json || isJsonMode()) {
+    printJson(response);
+  } else if (isFreestyle) {
+    // Freestyle completion has a different shape; pretty-print as JSON until
+    // we have a dedicated renderer.
     printJson(response);
   } else {
     printExecution(response.data);
   }
+}
+
+function isLikelyNotFound(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const anyErr = err as { status?: number; statusCode?: number; message?: string; code?: string };
+  if (anyErr.status === 404 || anyErr.statusCode === 404) return true;
+  if (anyErr.code === 'not_found') return true;
+  const msg = (anyErr.message || '').toLowerCase();
+  return msg.includes('not found') || msg.includes('404');
 }

@@ -11,7 +11,7 @@ description: >
   `lamina` commands.
 metadata:
   author: lamina-team
-  version: "0.5.1"
+  version: "0.5.3"
 ---
 
 # Lamina CLI: brand-aware AI media generation
@@ -93,32 +93,120 @@ automatically. This skill teaches you the canonical flow and the rules.
 
 For full options on any command: `lamina <cmd> --help`.
 
-## The canonical agent flow
+## The canonical agent flow — plan once, then run
 
-For any "generate / create / make something" request:
+For any "generate / create / make something" request from a brief:
 
 ```
-1. lamina apps list --search "<keyword>" --json
-   → grab .data[].appId of the best match
-2. lamina apps get <appId> --json
-   → read .data.parameters[] to know what inputs are needed
-3. (if user gave you a local file)
+1. (if the user gave a local file path)
    lamina assets upload <path> --json
-   → grab .data.url, use as input value
-4. lamina run <appId> --input key=value [--input ...] --wait --json
-   → read .data.outputs[].value for the result URLs
-5. Surface the URLs to the user. Done.
+   → grab .data.url; you'll pass it as a --input value below
+
+2. lamina content plan "<the user's brief>" \
+     [--modality image|video] [--platform <name>] [--app-id <pinned-id>] \
+     [--input <name>=<value>]* --json
+   → one LLM call. Returns the agent's decision (an app, or a recipe).
+
+3. Branch on data.status:
+     'plan'      → see "Dispatching a plan" below.
+     'unmatched' → tell the human; suggest rephrasing.
+
+4. Surface outputs to the user. Done.
 ```
 
-If the user gave a brief that doesn't obviously map to an app, use the
-planner instead of guessing:
+`plan` is the **only** LLM-driven step. The dispatch step (`lamina run`) is
+deterministic — pure schema validation + workflow dispatch, no LLM. That
+means **the agent's decision binds**: once `plan` returns a `selectedApp.appId`
+or a recipe, `lamina run` honors it exactly. No drift across turns.
+
+## Dispatching a plan
+
+When `lamina content plan` returns `status: "plan"`, the response has
+`mode: 'app' | 'recipe'`. Two dispatch paths, same shape of skill rule:
+
+### `mode: 'app'`
+
+```
+data = response.data
+# data has: selectedApp.appId, draftedInputs, askUser, warnings
+
+if data.askUser is non-empty:
+  for each askUser item { name, question }:
+    ASK the human the question in chat
+    collect the answer
+    if the answer is a local file path:
+      run `lamina assets upload <path> --json` → use returned .data.url
+
+# Dispatch: pass drafted inputs AND asked answers.
+lamina run <data.selectedApp.appId> \
+  --input <each drafted key>=<value> \
+  --input <each asked name>=<answer> \
+  --wait --json
+# → data.outputs[].value are the result URLs.
+```
+
+### `mode: 'recipe'`
+
+When no catalog app fits the brief, the dynamic-planner agent emits a
+**recipe** — a per-variant spec (model + prompt + params). The CLI saves
+the recipe JSON to a local file (`~/.lamina/recipes/recipe-<date>-<id>.json`).
+The path comes back as `recipeFile` in the printed output (and in `--json`
+when the file was written successfully).
+
+```
+data = response.data
+# data has: recipe, modality, askUser, warnings
+# recipeFile is added by the CLI (or available from the printed Next: line)
+
+if data.askUser is non-empty:
+  for each askUser item: ask human, collect answer (upload local paths first)
+
+lamina run --recipe-file <recipeFile> \
+  --input <each asked name>=<answer> \
+  --wait --json
+```
+
+### Worked example — selfie via plan + run
 
 ```bash
-lamina content plan "<the user's brief>" --json
-# Server-side planner agent picks the right app + drafts inputs.
-# Returns either { needsInput: [...] } (you must collect more from user)
-# or { runId: "..." } (run is already dispatched, just wait on it).
+# Turn 1 — plan (one LLM call)
+lamina content plan "selfie with Tom Holland" --modality image --json
+# → {
+#     status: "plan",
+#     mode: "app",
+#     selectedApp: { appId: "e0124407-d57a-4f76-ac5a-be0041e55a24", ... },
+#     draftedInputs: { celebrity_text: "Tom Holland" },
+#     askUser: [{ name: "your_photo_image_url", question: "Drop a photo of yourself …" }],
+#     warnings: []
+#   }
+
+# Ask the human in chat: "Got a photo of yourself for the selfie?"
+# Human: "/Users/me/photo.jpg"
+
+lamina assets upload /Users/me/photo.jpg --json
+# → { data: { url: "https://media.getmason.io/..." } }
+
+# Turn 2 — DETERMINISTIC dispatch (no LLM, no drift)
+lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 \
+  --input celebrity_text="Tom Holland" \
+  --input your_photo_image_url="https://media.getmason.io/..." \
+  --wait --json
+# → completes; outputs[0].value is the image URL.
 ```
+
+## Critical rules
+
+- **Never re-call `lamina content plan` to resolve askUser items.** The agent
+  made a decision in turn 1 (`selectedApp.appId` or recipe). Re-calling plan
+  would run the LLM again and may pick a different app — silent drift. The
+  asks loop **always** dispatches through `lamina run`.
+- **DO re-call `plan` with a refined brief** when the response is `status: "unmatched"`
+  and you've gotten clarifying info from the human (e.g., they didn't specify
+  modality and you asked them).
+- **Always `lamina assets upload <path>` for local file paths** in askUser
+  answers before passing as `--input` values. Asset params expect URLs, not paths.
+- **`lamina runs wait <runId>` is polymorphic** — works for both app runs and
+  recipe runs. No need to remember which mode you dispatched.
 
 ## Auth + endpoint resolution
 
