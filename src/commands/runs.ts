@@ -40,13 +40,16 @@ Options:
                          agent flows; chain multiple short waits instead of
                          one long block.
   --interval-ms <ms>     Poll interval, default 2000.
-  --download <template>  Save terminal-completed outputs to disk after the
-                         wait resolves. Same template syntax as
-                         \`lamina run --download\` — placeholders:
-                           {runId} {index} {ext} {label}
-                         Example: --download "./out/{runId}_{index}.{ext}"
-                         In JSON mode each downloaded file appears under
-                         \`data.downloads[]\` alongside \`data.outputs[]\`.
+  --download <path>      Save terminal-completed outputs to disk at the
+                         given path after the wait resolves. Smart path
+                         resolution (same as \`lamina run --download\`):
+                           ./out/hero.png  → literal for 1 output;
+                                             auto-suffixed _0/_1/_2 for N
+                           ./out/          → folder; files land inside
+                           ./out/{runId}_{index}.{ext}
+                                           → advanced template, verbatim
+                         Parent dirs auto-created. In JSON mode files
+                         appear under \`data.downloads[]\`.
   --json                 Emit the raw API envelope.
   --help, -h             Show this help.
 `;

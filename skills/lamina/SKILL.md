@@ -104,7 +104,6 @@ automatically. This skill teaches you the canonical flow and the rules.
 | `lamina run <appId> ...` | Execute a catalog app (deterministic, no LLM) |
 | `lamina run --recipe-file <path> ...` | Execute a freestyle recipe from `~/.lamina/recipes/...` |
 | `lamina webhook status` / `lamina webhook clear` | Inspect / clear the saved default webhook URL |
-| `lamina content brief "<goal>"` | Generate concept ideas (no dispatch) |
 | `lamina intelligence brand-context` | Workspace brand DNA |
 | `lamina intelligence predict "<concept>"` | Performance prediction |
 | `lamina intelligence recommendations` | Actionable content recommendations |
@@ -406,41 +405,25 @@ Key differences from Example A:
 - Recipe runs are typically slower than app runs → `--async` + bounded
   `runs wait` chunks instead of inline `--wait`
 
-## Saving outputs to disk — `--download <template>`
+## Saving outputs to disk — `--download <path>`
 
-Both `lamina run` and `lamina runs wait` accept `--download <template>`
-to save terminal-completed outputs to local files. The template is a
-path with placeholders:
+`--download <path>` saves the result(s) to disk wherever the user names.
+Works on `lamina run --wait` and `lamina runs wait <runId>` (any command
+that resolves a run terminally). Smart path resolution — the agent just
+passes the user's literal path, CLI handles the rest:
 
-| Placeholder | What it expands to |
-|---|---|
-| `{runId}` | The run UUID |
-| `{index}` | 0-based output index (REQUIRED when the run has 2+ outputs — prevents collisions) |
-| `{ext}` | File extension inferred from URL or `Content-Type` (png, mp4, mp3, etc.) |
-| `{label}` | Slugified output label / id (apps: parameter labels; recipes: variant `styleHint`) |
+- `--download "./public/hero.png"` → single output lands there literally;
+  multiple outputs auto-suffix as `hero_0.png`, `hero_1.png`, …
+- `--download "./out/"` (folder, trailing slash) → files land inside as
+  `label_0.png`, `label_1.png`, …
+- `--download "./out/{runId}_{label}_{index}.{ext}"` → advanced template,
+  used verbatim. Placeholders: `{runId}` `{index}` `{ext}` `{label}`.
 
-Parent directories are created automatically. In JSON mode, downloaded
-files appear under `data.downloads[]` alongside the URLs in
-`data.outputs[]`.
-
-```bash
-# Fast image work — wait + download inline
-lamina run <appId> --input ... \
-  --wait --timeout-ms 60000 \
-  --download "./out/{runId}_{index}.{ext}" --json
-
-# Long-running work — async dispatch, then download once terminal
-lamina run --recipe-file <path> --input ... --async --json
-# → returns runId; later:
-lamina runs wait <runId> --timeout-ms 120000 \
-  --download "./out/{runId}_{label}_{index}.{ext}" --json
-```
-
-`--download` requires `--wait` on `lamina run` (there's nothing on disk
-until terminal). For `--async` dispatches, pair it with `lamina runs wait`
-once the run completes. The agent's pattern is: dispatch async → bounded
-`runs wait` chunks → on terminal, add `--download` to the final wait
-that captures the outputs.
+Parent directories are auto-created. In JSON mode, downloaded files
+appear under `data.downloads[]` alongside the URLs in `data.outputs[]`.
+The download only fires when the run reaches terminal — on chunked polls
+of a long job, add `--download <path>` to every poll; it quietly does
+nothing until the poll that finally catches terminal.
 
 ## Anti-drift rules (when NOT to re-call plan)
 

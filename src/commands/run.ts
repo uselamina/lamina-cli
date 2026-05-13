@@ -58,21 +58,23 @@ Webhook:
 
 Output:
   --json                   Emit the raw API envelope.
-  --download <template>    Save terminal-completed outputs to disk. Requires
-                           --wait. The template is a path with placeholders:
-                             {runId}   the run UUID
-                             {index}   0-based output index (REQUIRED when
-                                       the run has 2+ outputs, prevents
-                                       file-name collisions)
-                             {ext}     file extension inferred from URL or
-                                       Content-Type (png, mp4, etc.)
-                             {label}   slugified output label / id
-                           Parent directories are created if missing.
-                           Example: --download "./out/{runId}_{index}.{ext}"
-                           Files are downloaded after --wait reaches a
-                           terminal state. In JSON mode each downloaded
-                           file appears under \`data.downloads[]\` alongside
-                           \`data.outputs[]\`.
+  --download <path>        Save terminal-completed outputs to disk at the
+                           given path. Requires --wait. The CLI handles
+                           single-vs-multi-output and folder-vs-file
+                           automatically:
+                             ./public/hero.png   → literal file for 1
+                                                   output; auto-suffixed
+                                                   ./public/hero_0.png,
+                                                   _1.png, … for N outputs
+                             ./public/           → folder; files land
+                                                   inside as label_0.png,
+                                                   label_1.png, …
+                             ./out/{runId}_{index}.{ext}
+                                                 → advanced template form,
+                                                   used verbatim
+                           Parent directories are auto-created. In JSON
+                           mode each downloaded file appears under
+                           \`data.downloads[]\` alongside \`data.outputs[]\`.
   --help, -h               Show this help.
 
 Examples:

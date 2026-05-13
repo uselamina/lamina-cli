@@ -72,21 +72,16 @@ export async function downloadOutputs({
 
   if (ready.length === 0) return [];
 
-  // Collision check: when there are 2+ outputs, the template MUST include
-  // {index} (or {label} which is per-output) — otherwise every output
-  // writes to the same path and only the last survives.
-  if (
-    ready.length > 1 &&
-    !template.includes('{index}') &&
-    !template.includes('{label}')
-  ) {
-    throw new LaminaCliError({
-      code: 'invalid_argument',
-      exitCode: EXIT.INVALID_USAGE,
-      message: `--download template must include {index} or {label} when the run has ${ready.length} outputs.`,
-      suggestion: 'Example: --download "./out/{runId}_{index}.{ext}"',
-    });
-  }
+  // Resolve the user-supplied template into one with placeholders that
+  // safely express collision-free per-output paths. Three input shapes:
+  //   1. Path contains {placeholder}s → used verbatim (advanced form).
+  //   2. Path ends in / (or has no extension) → treated as a folder; CLI
+  //      generates per-output filenames inside it.
+  //   3. Path has an extension (file path) → literal for 1 output;
+  //      auto-suffixed with _{index} before the extension for N>1.
+  // The agent always passes the user's path as-is; the CLI does the smart
+  // expansion. No collision errors, no template-must-include rules.
+  const effectiveTemplate = resolveTemplate(template, ready.length);
 
   const downloaded: DownloadedFile[] = [];
   for (const { out, i } of ready) {
@@ -95,7 +90,7 @@ export async function downloadOutputs({
     const ext = await inferExtension(url, out.mimeType ?? null);
     const label = slugifyLabel(out.label || out.id || 'output');
 
-    const localPath = template
+    const localPath = effectiveTemplate
       .replaceAll('{runId}', runId)
       .replaceAll('{index}', String(i))
       .replaceAll('{ext}', ext || 'bin')
@@ -123,6 +118,47 @@ export async function downloadOutputs({
   }
 
   return downloaded;
+}
+
+/**
+ * Resolve a user-supplied `--download` path into a collision-safe template.
+ *
+ * Three input shapes are accepted:
+ *
+ *   1. **Already a template** — contains `{runId}` / `{index}` / `{ext}` /
+ *      `{label}` placeholders. Used verbatim (advanced/explicit form).
+ *
+ *   2. **Folder path** — ends with a path separator, OR has no extension
+ *      (e.g. `./public/`, `./out`). Files land INSIDE the folder using a
+ *      default filename `{label}_{index}.{ext}`.
+ *
+ *   3. **File path with extension** — e.g. `./public/hero.png`.
+ *      - 1 output → literal path (file lands exactly where named).
+ *      - N>1 outputs → `_{index}` is auto-inserted before the extension
+ *        (e.g. `./public/hero_0.png`, `hero_1.png`, …) so no collisions.
+ *
+ * The agent always passes the user's path as-is; the CLI does the
+ * disambiguation. No "template-must-include" errors.
+ */
+function resolveTemplate(template: string, outputCount: number): string {
+  if (template.includes('{') && template.includes('}')) {
+    return template;
+  }
+
+  const ext = extname(template);
+  const looksLikeFolder =
+    template.endsWith('/') || template.endsWith('\\') || ext === '';
+  if (looksLikeFolder) {
+    const folder = template.replace(/[/\\]+$/, '');
+    return `${folder}/{label}_{index}.{ext}`;
+  }
+
+  if (outputCount > 1) {
+    const base = template.slice(0, -ext.length);
+    return `${base}_{index}${ext}`;
+  }
+
+  return template;
 }
 
 /**
