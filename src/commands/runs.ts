@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 
 import { createClientFromAuthContext } from '../lib/config.js';
+import { downloadOutputs, type DownloadedFile, type RunOutput } from '../lib/downloadOutputs.js';
 import { EXIT, LaminaCliError } from '../lib/errors.js';
 import { printExecution, printJson } from '../lib/output.js';
 import { isJsonMode } from '../lib/outputMode.js';
@@ -28,12 +29,26 @@ Options:
 const WAIT_HELP = `Usage: lamina runs wait <runId> [options]
 
 Block until the run reaches a terminal state (completed / failed / cancelled).
+Polymorphic — works for both app runs and freestyle recipe runs.
+
+To avoid hanging the chat session indefinitely, keep --timeout-ms bounded
+(≤180000ms) and re-call this command if the previous wait timed out without
+reaching terminal. See the skill's rule 5 for the recommended cadence.
 
 Options:
-  --timeout-ms <ms>  Max wait time, default 240000.
-  --interval-ms <ms> Poll interval, default 2000.
-  --json             Emit the raw API envelope.
-  --help, -h         Show this help.
+  --timeout-ms <ms>      Max wait time, default 240000. Bound to ≤180000 in
+                         agent flows; chain multiple short waits instead of
+                         one long block.
+  --interval-ms <ms>     Poll interval, default 2000.
+  --download <template>  Save terminal-completed outputs to disk after the
+                         wait resolves. Same template syntax as
+                         \`lamina run --download\` — placeholders:
+                           {runId} {index} {ext} {label}
+                         Example: --download "./out/{runId}_{index}.{ext}"
+                         In JSON mode each downloaded file appears under
+                         \`data.downloads[]\` alongside \`data.outputs[]\`.
+  --json                 Emit the raw API envelope.
+  --help, -h             Show this help.
 `;
 
 export async function handleRunsCommand(args: string[]): Promise<void> {
@@ -129,6 +144,7 @@ async function handleWait(args: string[]): Promise<void> {
       json: { type: 'boolean' },
       'interval-ms': { type: 'string' },
       'timeout-ms': { type: 'string' },
+      download: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -166,14 +182,33 @@ async function handleWait(args: string[]): Promise<void> {
     }
   }
 
+  const template = parsed.values.download as string | undefined;
+  let downloads: DownloadedFile[] | null = null;
+  if (template) {
+    const outputs = ((response as { data?: { outputs?: RunOutput[] } }).data?.outputs ?? []) as RunOutput[];
+    downloads = await downloadOutputs({ runId, outputs, template });
+    const data = (response as { data?: { downloads?: DownloadedFile[] } }).data;
+    if (data) data.downloads = downloads;
+  }
+
   if (parsed.values.json || isJsonMode()) {
     printJson(response);
   } else if (isFreestyle) {
     // Freestyle completion has a different shape; pretty-print as JSON until
     // we have a dedicated renderer.
     printJson(response);
+    if (downloads && downloads.length > 0) printDownloads(downloads);
   } else {
     printExecution(response.data);
+    if (downloads && downloads.length > 0) printDownloads(downloads);
+  }
+}
+
+function printDownloads(downloads: DownloadedFile[]): void {
+  process.stdout.write(`\nDownloaded ${downloads.length} file(s):\n`);
+  for (const d of downloads) {
+    const kb = (d.bytes / 1024).toFixed(1);
+    process.stdout.write(`  outputs[${d.outputIndex}] → ${d.localPath} (${kb} KB)\n`);
   }
 }
 

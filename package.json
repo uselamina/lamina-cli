@@ -1,6 +1,6 @@
 {
   "name": "@uselamina/cli",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "CLI for Lamina — run AI image, video, and content generation workflows from your terminal",
   "keywords": [
     "lamina",

@@ -21,6 +21,13 @@ export interface ResolvedAuthContext {
   storedCredentials: StoredLaminaCredentials | null;
 }
 
+/**
+ * Strict resolver: returns the saved-default URL, or throws.
+ *
+ * Used by older callsites that explicitly asked for `--webhook default`
+ * (or `local`). For dispatch commands prefer `resolveWebhookForDispatch`,
+ * which implements the full implicit-default + override + opt-out matrix.
+ */
 export async function resolveStoredWebhookUrl(
   override?: string | null
 ): Promise<{ webhookUrl: string; config: StoredWebhookConfig | null }> {
@@ -36,8 +43,58 @@ export async function resolveStoredWebhookUrl(
   }
 
   throw new Error(
-    'No default Lamina webhook URL is saved. Run `lamina webhook serve --public-url <url> --save-default` or pass --webhook https://... explicitly.'
+    'No default Lamina webhook URL is saved. Run `lamina webhook listen --public-url <url> --save-default` or pass --webhook https://... explicitly.'
   );
+}
+
+export type WebhookResolution =
+  | { webhookUrl: string; source: 'explicit' | 'stored' }
+  | { webhookUrl: null; source: 'opt_out' | 'none' };
+
+/**
+ * Mature webhook resolver for dispatch commands (`lamina run`).
+ *
+ * Precedence (most specific wins):
+ *   1. `--no-webhook`               → opt out for this call (returns null)
+ *   2. `--webhook none`             → same as --no-webhook
+ *   3. `--webhook <url>`            → use this URL exactly (overrides stored)
+ *   4. `--webhook default|local`    → use stored default; throw if not saved
+ *   5. No flag, but stored default  → use stored implicitly (transparent)
+ *   6. No flag, no stored           → no webhook (null), no error
+ *
+ * Rule (5) is the convenience: save once with `lamina webhook listen
+ * --public-url <url> --save-default`, then every `lamina run` auto-attaches
+ * the webhook. Users override per-call with --webhook <url> or opt out with
+ * --no-webhook. The dispatch path surfaces which source resolved so the
+ * CLI can tell the human "webhook (default): https://…".
+ */
+export async function resolveWebhookForDispatch(opts: {
+  explicit?: string | null;
+  optOut?: boolean;
+}): Promise<WebhookResolution> {
+  if (opts.optOut) return { webhookUrl: null, source: 'opt_out' };
+
+  const explicit = opts.explicit?.trim();
+
+  if (explicit === 'none') return { webhookUrl: null, source: 'opt_out' };
+
+  if (explicit && explicit !== 'default' && explicit !== 'local') {
+    return { webhookUrl: explicit, source: 'explicit' };
+  }
+
+  const stored = await readStoredWebhookConfig();
+  const savedUrl = stored?.publicUrl?.trim();
+  if (savedUrl) {
+    return { webhookUrl: savedUrl, source: 'stored' };
+  }
+
+  if (explicit === 'default' || explicit === 'local') {
+    throw new Error(
+      'No default Lamina webhook URL is saved. Run `lamina webhook listen --public-url <url> --save-default` or pass --webhook https://... explicitly.'
+    );
+  }
+
+  return { webhookUrl: null, source: 'none' };
 }
 
 /**

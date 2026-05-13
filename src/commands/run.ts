@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 
-import { createClientFromAuthContext, resolveStoredWebhookUrl } from '../lib/config.js';
+import { createClientFromAuthContext, resolveWebhookForDispatch } from '../lib/config.js';
+import { downloadOutputs, type DownloadedFile, type RunOutput } from '../lib/downloadOutputs.js';
 import { EXIT, LaminaCliError } from '../lib/errors.js';
 import {
   loadInputsFromFile,
@@ -41,12 +42,37 @@ Wait & poll:
   --interval-ms <ms>       Poll interval, default 2000 (with --wait).
 
 Webhook:
-  --webhook <url>          Send completion event to <url>.
-  --webhook default        Use the saved default URL.
-  --webhook local          Same as default; intended for local-tunnel setups.
+  --webhook <url>          Send completion event to <url> (overrides any
+                           saved default for this call).
+  --webhook default        Use the saved default URL. Same as omitting the
+                           flag when a default is saved — kept for scripts
+                           that want to be explicit.
+  --no-webhook             Suppress webhook delivery for this call, even if
+                           a default is saved.
+                           (alias: --webhook none)
+
+  When NO webhook flag is passed AND a default URL has been saved via
+  \`lamina webhook listen --public-url <url> --save-default\`, the stored URL
+  is used automatically. Inspect with \`lamina webhook status\`; clear with
+  \`lamina webhook clear\`.
 
 Output:
   --json                   Emit the raw API envelope.
+  --download <template>    Save terminal-completed outputs to disk. Requires
+                           --wait. The template is a path with placeholders:
+                             {runId}   the run UUID
+                             {index}   0-based output index (REQUIRED when
+                                       the run has 2+ outputs, prevents
+                                       file-name collisions)
+                             {ext}     file extension inferred from URL or
+                                       Content-Type (png, mp4, etc.)
+                             {label}   slugified output label / id
+                           Parent directories are created if missing.
+                           Example: --download "./out/{runId}_{index}.{ext}"
+                           Files are downloaded after --wait reaches a
+                           terminal state. In JSON mode each downloaded
+                           file appears under \`data.downloads[]\` alongside
+                           \`data.outputs[]\`.
   --help, -h               Show this help.
 
 Examples:
@@ -86,6 +112,8 @@ export async function handleRunCommand(args: string[]): Promise<void> {
         wait: { type: 'boolean' },
         async: { type: 'boolean' },
         webhook: { type: 'string' },
+        'no-webhook': { type: 'boolean' },
+        download: { type: 'string' },
         json: { type: 'boolean' },
         'interval-ms': { type: 'string' },
         'timeout-ms': { type: 'string' },
@@ -133,6 +161,20 @@ export async function handleRunCommand(args: string[]): Promise<void> {
     });
   }
 
+  // --download requires --wait. There's nothing to write to disk until the
+  // run reaches a terminal state; for async dispatches use
+  // `lamina runs wait <runId> --download <template>` after the fact.
+  if (parsed.values.download && !parsed.values.wait) {
+    throw new LaminaCliError({
+      code: 'invalid_argument',
+      exitCode: EXIT.INVALID_USAGE,
+      message: '--download requires --wait.',
+      suggestion:
+        'Either add --wait inline, or dispatch with --async and run\n' +
+        '`lamina runs wait <runId> --download <template>` once it completes.',
+    });
+  }
+
   if (parsed.values.help) {
     process.stdout.write(HELP);
     if (positionalAppId) await tryPrintAppParameters(positionalAppId);
@@ -160,13 +202,21 @@ async function dispatchApp(
   const inlineInputs = parseInlineInputs((parsed.values.input as string[]) || []);
   const inputs = { ...fileInputs, ...inlineInputs };
 
-  const rawWebhook = (parsed.values.webhook as string | undefined)?.trim();
-  const webhook =
-    rawWebhook === 'local' || rawWebhook === 'default'
-      ? (await resolveStoredWebhookUrl(rawWebhook)).webhookUrl
-      : rawWebhook;
+  const webhookResolution = await resolveWebhookForDispatch({
+    explicit: parsed.values.webhook as string | undefined,
+    optOut: parsed.values['no-webhook'] as boolean | undefined,
+  });
+  const webhook = webhookResolution.webhookUrl || undefined;
 
   const { client } = await createClientFromAuthContext();
+
+  // Surface the resolved webhook source in non-JSON output so the user
+  // sees when an implicit (stored-default) URL is firing. Silent in JSON
+  // mode — the structured envelope is enough.
+  if (webhook && !(parsed.values.json || isJsonMode())) {
+    const label = webhookResolution.source === 'stored' ? ' (default)' : '';
+    process.stdout.write(`Webhook${label}: ${webhook}\n`);
+  }
 
   const app = await client.apps.get(appId);
   validateInputsAgainstSchema(inputs, app.data.parameters);
@@ -191,10 +241,17 @@ async function dispatchApp(
       : 240000,
   });
 
+  const downloads = await maybeDownloadAndAnnotate({
+    parsed,
+    runId: started.data.runId,
+    response: completed,
+  });
+
   if (parsed.values.json || isJsonMode()) {
     printJson(completed);
   } else {
     printExecution(completed.data, { appName: started.data.workflowName });
+    if (downloads) printDownloads(downloads);
   }
 }
 
@@ -235,29 +292,30 @@ async function dispatchRecipe(
   const modality: 'image' | 'video' = recipe.modality === 'video' ? 'video' : 'image';
 
   // Merge --input answers into every variant's params. For images, target
-  // imageParams; for video, also imageParams (still inputs) and videoParams.
-  // Server-side validator will reject unknown keys per the freestyle model
-  // registry — we don't try to be clever here.
+  // imageParams; for video, imageParams (stage-1 still) AND videoParams.
+  //
+  // Array-typed slots: when a variant's params declare a key as an empty
+  // array (e.g. `imageParams.imageUrls = []` — the agent's placeholder for
+  // "to be filled from ask_user_for"), a scalar `--input` value is wrapped
+  // into a single-element array so the server validator accepts it. If
+  // the user supplied multiple values for the same key (repeated --input),
+  // parseInlineInputs already produced an array — pass it through.
   const inlineInputs = parseInlineInputs((parsed.values.input as string[]) || []);
-  const variants = recipe.variants.map((v) => {
-    if (Object.keys(inlineInputs).length === 0) return v;
-    const next: Record<string, unknown> = { ...v };
-    if (next.imageParams && typeof next.imageParams === 'object') {
-      next.imageParams = { ...(next.imageParams as Record<string, unknown>), ...inlineInputs };
-    } else {
-      next.imageParams = { ...inlineInputs };
-    }
-    if (modality === 'video' && next.videoParams && typeof next.videoParams === 'object') {
-      next.videoParams = { ...(next.videoParams as Record<string, unknown>), ...inlineInputs };
-    }
-    return next;
-  });
+  const variants = recipe.variants.map((v) =>
+    mergeInputsIntoVariant(v, inlineInputs, modality),
+  );
 
-  const rawWebhook = (parsed.values.webhook as string | undefined)?.trim();
-  const webhookUrl =
-    rawWebhook === 'local' || rawWebhook === 'default'
-      ? (await resolveStoredWebhookUrl(rawWebhook)).webhookUrl
-      : rawWebhook;
+  const webhookResolution = await resolveWebhookForDispatch({
+    explicit: parsed.values.webhook as string | undefined,
+    optOut: parsed.values['no-webhook'] as boolean | undefined,
+  });
+  const webhookUrl = webhookResolution.webhookUrl || undefined;
+
+  // Surface the resolved webhook source in non-JSON output.
+  if (webhookUrl && !(parsed.values.json || isJsonMode())) {
+    const label = webhookResolution.source === 'stored' ? ' (default)' : '';
+    process.stdout.write(`Webhook${label}: ${webhookUrl}\n`);
+  }
 
   const { client } = await createClientFromAuthContext();
 
@@ -295,13 +353,100 @@ async function dispatchRecipe(
       : 240000,
   });
 
+  const downloads = await maybeDownloadAndAnnotate({
+    parsed,
+    runId: started.data.runId,
+    response: completed,
+  });
+
   if (parsed.values.json || isJsonMode()) {
     printJson(completed);
   } else {
-    // Reuse printExecution-style output. Freestyle completed runs may have a
-    // slightly different shape; for now surface the JSON if not pretty.
+    // Freestyle completed runs use a slightly different shape than apps; for
+    // now surface the JSON inline. Pretty rendering comes in a later pass.
     printJson(completed);
+    if (downloads) printDownloads(downloads);
   }
+}
+
+/**
+ * If `--download <template>` was supplied, download every terminal-completed
+ * output to disk via the template, mutate the response envelope to include
+ * `data.downloads[]` so the JSON envelope captures local paths alongside
+ * source URLs, and return the list for the non-JSON renderer to print.
+ *
+ * Returns null when --download wasn't passed (no work to do).
+ */
+async function maybeDownloadAndAnnotate({
+  parsed,
+  runId,
+  response,
+}: {
+  parsed: ReturnType<typeof parseArgs>;
+  runId: string;
+  response: { data?: { outputs?: RunOutput[]; downloads?: DownloadedFile[] } };
+}): Promise<DownloadedFile[] | null> {
+  const template = parsed.values.download as string | undefined;
+  if (!template) return null;
+
+  const outputs = (response.data?.outputs as RunOutput[]) || [];
+  const downloads = await downloadOutputs({ runId, outputs, template });
+
+  if (response.data) {
+    response.data.downloads = downloads;
+  }
+  return downloads;
+}
+
+function printDownloads(downloads: DownloadedFile[]): void {
+  if (downloads.length === 0) return;
+  process.stdout.write(`\nDownloaded ${downloads.length} file(s):\n`);
+  for (const d of downloads) {
+    const kb = (d.bytes / 1024).toFixed(1);
+    process.stdout.write(`  outputs[${d.outputIndex}] → ${d.localPath} (${kb} KB)\n`);
+  }
+}
+
+/**
+ * Merge user-supplied --input values into a recipe variant.
+ *
+ * For each input key:
+ *   - If the variant declares the key as an array (e.g. `imageUrls: []` —
+ *     the agent's placeholder for a pending ask), wrap a scalar string into
+ *     a single-element array. Arrays from parseInlineInputs pass through.
+ *   - Otherwise the value merges directly (scalar overrides scalar).
+ *
+ * Video variants also receive the merged inputs into videoParams so stage-2
+ * params (e.g. duration, motion overrides) can be supplied at dispatch.
+ */
+function mergeInputsIntoVariant(
+  variant: Record<string, unknown>,
+  inputs: Record<string, unknown>,
+  modality: 'image' | 'video',
+): Record<string, unknown> {
+  if (Object.keys(inputs).length === 0) return variant;
+
+  const merged = (
+    target: Record<string, unknown> | undefined,
+  ): Record<string, unknown> => {
+    const base = target && typeof target === 'object' ? { ...target } : {};
+    for (const [k, v] of Object.entries(inputs)) {
+      const existing = base[k];
+      if (Array.isArray(existing) && !Array.isArray(v)) {
+        base[k] = [v];
+      } else {
+        base[k] = v;
+      }
+    }
+    return base;
+  };
+
+  const next: Record<string, unknown> = { ...variant };
+  next.imageParams = merged(next.imageParams as Record<string, unknown> | undefined);
+  if (modality === 'video') {
+    next.videoParams = merged(next.videoParams as Record<string, unknown> | undefined);
+  }
+  return next;
 }
 
 /**

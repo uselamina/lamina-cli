@@ -37,6 +37,16 @@ function parseValue(raw: string): unknown {
   return raw;
 }
 
+/**
+ * Parse `--input <key>=<value>` flags into an object.
+ *
+ * Repeated keys are collected into an array, so `--input imageUrls=https://a
+ * --input imageUrls=https://b` produces `{ imageUrls: ['https://a',
+ * 'https://b'] }`. A single occurrence stays a scalar so existing app
+ * dispatch paths (where most params are scalar) are unaffected. Downstream
+ * code that targets array-typed slots is responsible for wrapping scalars
+ * if needed.
+ */
 export function parseInlineInputs(entries: string[] = []): Record<string, unknown> {
   return entries.reduce<Record<string, unknown>>((acc, entry) => {
     const separatorIndex = entry.indexOf('=');
@@ -59,7 +69,13 @@ export function parseInlineInputs(entries: string[] = []): Record<string, unknow
       });
     }
 
-    acc[key] = parseValue(value);
+    const parsed = parseValue(value);
+    if (key in acc) {
+      const existing = acc[key];
+      acc[key] = Array.isArray(existing) ? [...existing, parsed] : [existing, parsed];
+    } else {
+      acc[key] = parsed;
+    }
     return acc;
   }, {});
 }
