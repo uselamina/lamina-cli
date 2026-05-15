@@ -187,6 +187,19 @@ export function printAppDetail(app: AppDetail): void {
       process.stdout.write(`    default: ${defaultStr}\n`);
     }
   }
+
+  // Output contract — what the app produces. Use these `label` values with
+  // `lamina run <appId> --output "<label>"` to run only a subset of the
+  // workflow (rest of the graph is skipped, saving credits + time).
+  if (app.outputs && app.outputs.length > 0) {
+    process.stdout.write(`\nOutputs (${app.outputs.length}):\n`);
+    for (const o of app.outputs) {
+      process.stdout.write(`  [${o.index}] ${o.label} (${o.type})\n`);
+    }
+    process.stdout.write(
+      `\nSelect a subset with --output "<label>" on \`lamina run\` (repeatable).\n`,
+    );
+  }
 }
 
 export function printAssetUpload(data: AssetUploadResult & { sizeBytes?: number }): void {
@@ -558,6 +571,26 @@ export function printContentPlan(
     return;
   }
 
+  if (data.status === 'needs_clarification') {
+    process.stdout.write(`Status:  needs_clarification\n`);
+    process.stdout.write(
+      `\nThe router paused before committing — it needs a strategic answer\n` +
+        `from you before it can pick the right app or recipe.\n`
+    );
+    if (data.clarifications.length > 0) {
+      process.stdout.write(`\nClarifications (${data.clarifications.length}):\n`);
+      for (const c of data.clarifications) {
+        process.stdout.write(`  - ${c.question}\n`);
+      }
+    }
+    process.stdout.write(
+      `\nNext: answer each question, fold the answers into a refined brief,\n` +
+        `then re-call \`lamina content plan\`. This is the ONLY status where\n` +
+        `re-calling plan is the correct move.\n`
+    );
+    return;
+  }
+
   // status === 'plan'
   process.stdout.write(`Status:      plan\n`);
 
@@ -579,12 +612,25 @@ export function printContentPlan(
       }
     }
 
+    const selectedOutputs = data.selectedOutputs;
+    if (selectedOutputs && selectedOutputs.length > 0) {
+      process.stdout.write(`\nSelected outputs (${selectedOutputs.length}):\n`);
+      for (const label of selectedOutputs) {
+        process.stdout.write(`  - ${label}\n`);
+      }
+    }
+
     if (data.warnings.length > 0) {
       process.stdout.write(`\nWarnings (${data.warnings.length}):\n`);
       for (const w of data.warnings) {
         process.stdout.write(`  ${w.field}: ${w.message}\n`);
       }
     }
+
+    const outputFlagsBlock =
+      selectedOutputs && selectedOutputs.length > 0
+        ? selectedOutputs.map((l: string) => `    --output ${JSON.stringify(l)} \\\n`).join('')
+        : '';
 
     if (data.askUser.length > 0) {
       process.stdout.write(`\nNeed from you (${data.askUser.length}):\n`);
@@ -596,6 +642,7 @@ export function printContentPlan(
           `  lamina run ${data.selectedApp.appId} \\\n` +
           `    --input <each drafted-key>=<value> \\\n` +
           `    --input <each asked-name>=<answer> \\\n` +
+          outputFlagsBlock +
           `    --wait --json\n`
       );
     } else {
@@ -603,6 +650,7 @@ export function printContentPlan(
         `\nReady to dispatch:\n` +
           `  lamina run ${data.selectedApp.appId} \\\n` +
           `    --input <each drafted-key>=<value> \\\n` +
+          outputFlagsBlock +
           `    --wait --json\n`
       );
     }

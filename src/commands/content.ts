@@ -21,9 +21,10 @@ High-level natural-language entry points. For low-level (specific app +
 explicit inputs) use \`lamina run\`.
 
 Subcommands:
-  plan <brief>       Brief → server picks an app, classifies inputs as
-                     drafted/defaulted/must-supply, returns a plan.
-                     Use --dispatch to auto-run when nothing's missing.
+  plan <brief>       Brief → server picks an app or freestyle recipe and
+                     drafts inputs. NEVER dispatches — returns a plan you
+                     then act on with \`lamina run\` (app mode) or
+                     \`lamina run --recipe-file <path>\` (recipe mode).
   brief <goal>       Goal → concept ideas (no dispatch).
   score              Score this workspace's published content against
                      brand standards.
@@ -33,39 +34,63 @@ Run \`lamina content <subcommand> --help\` for subcommand options.
 
 const PLAN_HELP = `Usage: lamina content plan "<brief>" [options]
 
-Send a brief to the content router agent. The agent picks the best app,
-drafts what it can from the brief + any \`--input\` values you provide,
-and either:
+Send a brief to the content router agent. The agent picks the best app
+(or falls back to a freestyle recipe when nothing fits), drafts inputs
+from the brief, and emits open questions for inputs it cannot infer.
 
-  • Dispatches the run when nothing user-specific is missing, OR
-  • Returns "askUser" questions when the brief isn't enough yet (e.g. it
-    needs a photo URL, a product name, or a choice you should make).
+This command NEVER dispatches a run. It returns one of four shapes
+keyed on \`data.status\`:
 
-When askUser is non-empty, ASK THE HUMAN for each item, then re-invoke
-this command with \`--input <name>=<value>\` for each answer. Loop until
-askUser is empty and a runId is returned.
+  • status: "plan" + mode: "app"
+      response.data includes:
+        selectedApp.appId, selectedApp.rationale, draftedInputs,
+        askUser[], selectedOutputs? (only when brief subsets outputs),
+        warnings[]
+      Next: ask the human each askUser question, then dispatch with
+        lamina run <selectedApp.appId> \\
+          --input <each draftedInputs key>=<value> \\
+          --input <each askUser name>=<answer> \\
+          --output "<each selectedOutputs label>"   (if present)
+          --wait --json
+
+  • status: "plan" + mode: "recipe"
+      response.data includes: recipe, recipeFile, askUser[], warnings[]
+      Next: ask the human, then dispatch with
+        lamina run --recipe-file <recipeFile> --input <answers> --wait --json
+
+  • status: "needs_clarification"
+      response.data includes: clarifications[]
+      The agent paused before committing — it needs a strategic answer
+      (preset customization, ambiguous routing, missing platform/scope).
+      Next: ask the human each clarification, fold answers into a refined
+      brief, then re-call this command. This is the ONLY status where
+      re-calling plan is the correct response.
+
+  • status: "unmatched"
+      Brief is outside Lamina's surface (e.g. not a visual creative
+      request, or beyond model ceilings). Tell the human; do not retry.
+
+ANTI-DRIFT: NEVER re-call this command to resolve askUser items. The
+agent's app choice binds — re-calling re-rolls the LLM and may pick a
+different app (silent drift). Asks are resolved via \`lamina run\` flags.
 
 Options:
-  --input <name>=<value>     Provide a value for one of the agent's
-                             questions. Repeatable. The agent will relay
-                             the value to the matching app parameter and
-                             will NOT re-ask.
+  --input <name>=<value>     Pre-supply an input the router would otherwise
+                             ask for. Repeatable. Useful when the brief
+                             needs an asset URL you already have.
   --platform <name>          Target platform hint (e.g. instagram, tiktok).
   --modality <kind>          Modality hint: image | video.
-  --app-id <uuid>            Skip ranking and use this app directly.
+  --app-id <uuid>            Skip ranking and pin to this app directly.
   --brand-profile-id <uuid>  Apply a specific brand profile.
   --num-variants <n>         Variant count when the agent goes freestyle.
-  --webhook <url>            Get a POST callback when a run dispatches.
-  --wait                     Block until the dispatched run completes.
-  --timeout-ms <ms>          Max wait time, default 240000 (with --wait).
-  --interval-ms <ms>         Poll interval, default 2000 (with --wait).
   --json                     Emit the raw API envelope.
   --help, -h                 Show this help.
 
 Examples:
   lamina content plan "a selfie with Tom Holland" --modality image
-  lamina content plan "a selfie with Tom Holland" \\
+  lamina content plan "selfie with Tom Holland" --modality image \\
     --input your_photo_image_url=https://media.getmason.io/abc.jpg
+  lamina content plan "catalog shoot, just the front view" --modality image
   lamina content plan "spring IG carousel" --platform instagram
 
 Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials.
@@ -136,7 +161,7 @@ export async function handleContentCommand(args: string[]): Promise<void> {
       exitCode: EXIT.INVALID_USAGE,
       message: '`lamina content create` was removed.',
       suggestion:
-        'Use `lamina content plan "<brief>"` to plan a run (preview-then-apply, like `terraform plan`). Add --dispatch to run immediately when nothing\'s missing.',
+        'Use `lamina content plan "<brief>"` to get a routing decision (app or recipe + drafted inputs + open questions), then dispatch deterministically with `lamina run`.',
     });
   }
 

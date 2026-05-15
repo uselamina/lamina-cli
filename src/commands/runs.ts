@@ -13,6 +13,7 @@ Inspect runs you started with \`lamina run\`.
 Subcommands:
   get <runId>        Print current status and outputs.
   wait <runId>       Block until the run reaches a terminal state.
+  cancel <runId>     Cancel a queued or running execution.
 
 Run \`lamina runs <subcommand> --help\` for subcommand options.
 `;
@@ -54,6 +55,25 @@ Options:
   --help, -h             Show this help.
 `;
 
+const CANCEL_HELP = `Usage: lamina runs cancel <runId> [options]
+
+Cancel a queued or running execution. Idempotent — if the run already
+reached a terminal state (completed/failed/cancelled) the server returns
+its current status without erroring.
+
+Use this when the user changes their mind mid-flight (wrong inputs after
+dispatch, oversized variant set, abandoned long-running job). Don't just
+stop polling — orphaned runs continue consuming credits.
+
+Options:
+  --json             Emit the raw API envelope.
+  --help, -h         Show this help.
+
+Examples:
+  lamina runs cancel exec_8f2a...
+  lamina runs cancel exec_8f2a... --json
+`;
+
 export async function handleRunsCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
 
@@ -75,6 +95,10 @@ export async function handleRunsCommand(args: string[]): Promise<void> {
   }
   if (subcommand === 'wait') {
     await handleWait(args.slice(1));
+    return;
+  }
+  if (subcommand === 'cancel') {
+    await handleCancel(args.slice(1));
     return;
   }
 
@@ -204,6 +228,52 @@ async function handleWait(args: string[]): Promise<void> {
   } else {
     printExecution(response.data);
     if (downloads && downloads.length > 0) printDownloads(downloads);
+  }
+}
+
+async function handleCancel(args: string[]): Promise<void> {
+  if (args[0] === '--help' || args[0] === '-h') {
+    process.stdout.write(CANCEL_HELP);
+    return;
+  }
+
+  const runId = args[0];
+  if (!runId) {
+    process.stdout.write(CANCEL_HELP);
+    throw new LaminaCliError({
+      code: 'invalid_argument',
+      exitCode: EXIT.INVALID_USAGE,
+      message: 'Missing <runId>.',
+    });
+  }
+
+  const parsed = parseArgs({
+    args: args.slice(1),
+    options: {
+      json: { type: 'boolean' },
+      help: { type: 'boolean', short: 'h' },
+    },
+    allowPositionals: false,
+  });
+
+  if (parsed.values.help) {
+    process.stdout.write(CANCEL_HELP);
+    return;
+  }
+
+  const { client } = await createClientFromAuthContext();
+  const response = await client.runs.cancel(runId);
+
+  if (parsed.values.json || isJsonMode()) {
+    printJson(response);
+    return;
+  }
+
+  const { runId: id, status } = response.data;
+  if (status === 'cancelled') {
+    process.stdout.write(`Cancelled run ${id} (status: cancelled).\n`);
+  } else {
+    process.stdout.write(`Run ${id} already terminal (status: ${status}); no cancellation needed.\n`);
   }
 }
 

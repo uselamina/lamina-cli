@@ -56,6 +56,15 @@ Webhook:
   is used automatically. Inspect with \`lamina webhook status\`; clear with
   \`lamina webhook clear\`.
 
+Output selection:
+  --output <label>         Run only the named output(s) instead of the full
+                           app workflow. Pass the label string from
+                           \`lamina apps get <appId>\`'s \`outputs[]\` array
+                           (case-insensitive). Repeatable for multiple
+                           outputs. Omitted → all of the app's outputs run.
+                           Example: --output "Front View" --output "Lifestyle View"
+                           Saves credits + time by skipping unrelated nodes.
+
 Output:
   --json                   Emit the raw API envelope.
   --download <path>        Save terminal-completed outputs to disk at the
@@ -81,6 +90,8 @@ Examples:
   lamina run e0124407-d57a-4f76-ac5a-be0041e55a24
   lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 --input celebrity_text="Brad Pitt"
   lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 --file inputs.json --wait
+  lamina run 19fdcc86-... --input front_image_url=https://... \\
+    --output "Front View" --output "Lifestyle View" --wait
   lamina run --recipe-file ~/.lamina/recipes/recipe-2026-05-12-abc.json --wait
 
 Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials. Override the
@@ -115,6 +126,7 @@ export async function handleRunCommand(args: string[]): Promise<void> {
         async: { type: 'boolean' },
         webhook: { type: 'string' },
         'no-webhook': { type: 'boolean' },
+        output: { type: 'string', multiple: true },
         download: { type: 'string' },
         json: { type: 'boolean' },
         'interval-ms': { type: 'string' },
@@ -223,7 +235,15 @@ async function dispatchApp(
   const app = await client.apps.get(appId);
   validateInputsAgainstSchema(inputs, app.data.parameters);
 
-  const started = await client.runs.run(appId, { inputs, webhook });
+  // `--output <label>` (repeatable) selects a subset of the app's outputs.
+  // Omitted → undefined → full workflow runs (server default).
+  const outputs = (parsed.values.output as string[] | undefined)?.filter((s) => s.trim().length > 0);
+
+  const started = await client.runs.run(appId, {
+    inputs,
+    webhook,
+    ...(outputs && outputs.length > 0 ? { outputs } : {}),
+  });
 
   if (!parsed.values.wait) {
     if (parsed.values.json || isJsonMode()) {

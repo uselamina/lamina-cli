@@ -113,6 +113,57 @@ for LLM-routed items the legacy router has older logic.
 
 ---
 
+## Per-variant `--input` targeting on multi-variant recipes — **Missing**
+
+Recipes already support multiple variants natively. The agent bakes
+per-variant differences in `imageModel`, `imageParams`, `prompt`, and
+`styleHint` at plan time. At dispatch (`lamina run --recipe-file`), the
+CLI's merge logic applies every `--input k=v` to **every variant's**
+`imageParams` uniformly — there is no syntax for "this input goes to
+variant N only".
+
+What works today:
+
+- 3 styled variants of THE SAME product (`--input imageUrls=<one-url>`
+  applies to all 3) ✓
+- 4 variants where the differences are purely creative (different
+  prompts the agent wrote; no user inputs needed) ✓
+
+What does NOT work today:
+
+- 3 variants where each needs a DIFFERENT user-owned input (e.g.
+  variant 0 with photo A, variant 1 with photo B). No CLI syntax
+  expresses per-variant targeting.
+
+Workarounds today (both ugly):
+
+- Run `lamina run --recipe-file` multiple times, each with a
+  single-variant recipe + its own `--input`. Loses the "one
+  command, N variants" UX.
+- Hand-edit the recipe JSON to bake per-variant inputs before
+  dispatch. Brittle, exposes internals.
+
+Two design options for a clean fix (decide later, not in this
+session):
+
+- **A** — Per-variant `--input` targeting syntax:
+  `--input 0:imageUrls=<photoA> --input 1:imageUrls=<photoB>`.
+  Small CLI parser change in `parseInlineInputs` + index-aware
+  merge logic. The agent could be taught (via schema) to use
+  this when its `ask_user_for` items declare per-variant slots.
+
+- **B** — `lamina content batch` (already tracked above) is the
+  natural home for "N items, different inputs each". Per-variant
+  recipes could be expressed as N batch items. Larger surface
+  but more general.
+
+Recommendation: prioritize **B** (batch ships first, covers the
+broader use case). Revisit **A** only if real users hit the
+per-variant-recipe pattern often enough that batch feels like
+overkill.
+
+---
+
 ## Agent-install distribution — **CLI installs via npm only**
 
 SkyPilot and fal genmedia ship their skills via newer agent-native mechanisms.
@@ -198,3 +249,35 @@ flow and treats them as "advanced / out of scope."
    workspace-admin reads.
 4. **`lamina publishing`** — last because it's a different problem
    space (post-generation distribution, not generation itself).
+
+---
+
+## Parallel tool-call orchestration — **LOW PRIORITY**
+
+The OpenAI tool-use API supports the model issuing multiple tool calls
+in one assistant message ("parallel tool calls"). For ambiguous briefs,
+the model can speed up routing by issuing 2-3 parallel `searchApps`
+calls with different keyword angles in one turn instead of chaining
+them sequentially.
+
+Today the agent's outer loop ([contentRouterCliAgent.js](server/services/agents/contentRouterCliAgent.js))
+processes ONE `functionCall` per iteration. To prevent the resulting
+"missing tool_call_ids" 400 from OpenAI's next-message API, we set
+`parallel_tool_calls: false` on the chat completion ([openaiAgentChat.js](../react-flow-integration/server/services/agents/openaiAgentChat.js))
+— forcing the model to issue one tool call per turn.
+
+This is correct but conservative — the agent does sequential searches
+even when parallel would be faster. Future optimization (low priority):
+
+- Rewrite the outer loop to handle ALL `tool_calls` in one assistant
+  message: process each in turn, collect each as a `functionResponse`,
+  send them all back in the next `sendMessage` call.
+- Flip `parallel_tool_calls: true` (or remove the explicit `false`)
+  on the chat completion.
+- Win: ambiguous briefs that benefit from multi-angle search would
+  resolve in fewer round-trips. Latency improvement maybe 1-2 seconds
+  per plan for ambiguous briefs.
+
+Not blocking anything today — `parallel_tool_calls: false` works
+correctly. Revisit only when plan-call latency for ambiguous briefs
+becomes a real user complaint.

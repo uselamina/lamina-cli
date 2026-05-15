@@ -100,8 +100,9 @@ automatically. This skill teaches you the canonical flow and the rules.
 | `lamina run <appId> --input k=v --wait` | Execute an app (add `--download <template>` to also save outputs to disk) |
 | `lamina runs get <runId>` | Snapshot run status |
 | `lamina runs wait <runId>` | Block until terminal |
+| `lamina runs cancel <runId>` | Cancel a queued/running execution (idempotent) |
 | `lamina content plan "<brief>"` | Brief → app or recipe routing (LLM, never dispatches). Returns a plan you act on with `lamina run`. |
-| `lamina run <appId> ...` | Execute a catalog app (deterministic, no LLM) |
+| `lamina run <appId> ...` | Execute a catalog app (deterministic, no LLM). Add `--output "<label>"` (repeatable) to run only a subset of the app's outputs. |
 | `lamina run --recipe-file <path> ...` | Execute a freestyle recipe from `~/.lamina/recipes/...` |
 | `lamina webhook status` / `lamina webhook clear` | Inspect / clear the saved default webhook URL |
 | `lamina intelligence brand-context` | Workspace brand DNA |
@@ -142,13 +143,15 @@ The vague-brief flow:
 
 3. Branch on data.status:
      'plan'                → see "Dispatching a plan" below.
-     'needs_clarification' → ask the human the questions in askUser,
-                             refine the brief, re-call `lamina content plan`.
-                             (Only status where re-calling plan is correct.)
+     'needs_clarification' → the agent paused before committing. Ask the
+                             human each item in data.clarifications,
+                             fold the answers into a refined brief, then
+                             RE-CALL `lamina content plan`. This is the
+                             ONLY status where re-calling plan is correct.
      'unmatched'           → brief is outside Lamina's surface (not a visual
                              creative request, or no model can deliver in
                              one generation). Tell the human, suggest
-                             rephrasing or a different tool.
+                             rephrasing or a different tool. Never retry.
 
 4. Surface outputs to the user. Done.
 ```
@@ -244,10 +247,23 @@ When `lamina content plan` returns `status: "plan"`, the response has
 
 ### `mode: 'app'`
 
-```
-data = response.data
-# data has: selectedApp.appId, draftedInputs, askUser, warnings
+Shape of the response data (all fields the agent reads):
 
+| field | what it is | dispatches as |
+|---|---|---|
+| `selectedApp.appId` | The app the router committed to | first positional arg of `lamina run` |
+| `selectedApp.rationale` | One-sentence why this app fits | informational — surface to human if useful |
+| `draftedInputs` | Inputs the router pre-filled from the brief | one `--input <key>=<value>` per entry |
+| `askUser` *(may be empty)* | Inputs the router couldn't fill from the brief | ask the human → one `--input <name>=<answer>` per entry |
+| `selectedOutputs` *(may be absent)* | Output labels picked because the brief subsetted them | one `--output "<label>"` per entry |
+| `warnings` *(may be empty)* | Soft mismatches (e.g. brief said 9:16 but app has no aspect param) | surface to human as FYI; doesn't block dispatch |
+
+Procedure:
+
+```
+data = response.data   # status === "plan", mode === "app"
+
+# 1. Resolve any open questions in askUser.
 if data.askUser is non-empty:
   for each askUser item { name, question }:
     ASK the human the question in chat
@@ -255,12 +271,64 @@ if data.askUser is non-empty:
     if the answer is a local file path:
       run `lamina assets upload <path> --json` → use returned .data.url
 
-# Dispatch: pass drafted inputs AND asked answers.
+# 2. Build the dispatch command. Three repeatable flag groups:
+#    --input <draftedInputs>     --input <askUser answers>     --output <selectedOutputs>
+
 lamina run <data.selectedApp.appId> \
-  --input <each drafted key>=<value> \
-  --input <each asked name>=<answer> \
+  --input <each draftedInputs key>=<value> \
+  --input <each askUser name>=<answer> \
+  --output "<each selectedOutputs label>"   # ONLY if selectedOutputs is present
   --wait --json
-# → data.outputs[].value are the result URLs.
+
+# → response.data.outputs[].value are the result URLs (one per node that ran)
+```
+
+**Rules for the dispatch:**
+
+1. **Drafted inputs are non-negotiable** — pass every key in `data.draftedInputs` verbatim. They're the router's committed values from the brief; skipping them changes the run.
+2. **One `--input` per asked answer** — match the answer to `askUser[i].name`. If the human gave a file path, the URL from `lamina assets upload` is what flows here.
+3. **`--output` flags are conditional on `data.selectedOutputs`**:
+   - Field absent or empty → omit `--output` entirely → workflow runs ALL outputs (default).
+   - Field present with labels → one `--output "<label>"` per entry. Quote labels (they may contain spaces).
+4. **No second LLM call** — once you have the plan, the dispatch is mechanical. Never re-call `lamina content plan` to "double-check" the app or output choice.
+5. **The pretty-print CLI shows you the exact next command** — if you're running interactively, the `Next:` block in `lamina content plan`'s output has the literal command with `--output` flags pre-filled. JSON callers build it from the data fields above.
+
+Worked example — brief explicitly subsets outputs:
+
+```bash
+# Brief: "Product catalog shoot for my new sneaker — I only need the
+#         Front View and the Back View, skip the side angle and the video."
+lamina content plan "<that brief>" --modality image --json
+# → response.data:
+#     status:        "plan"
+#     mode:          "app"
+#     selectedApp:   { appId: "abc-123", name: "Product Catalog", rationale: "..." }
+#     draftedInputs: { environment_text: "Studio" }
+#     selectedOutputs: ["Front View", "Back View"]
+#     askUser:       [{ name: "product_import_product", question: "Drop a photo..." }]
+
+# After asking the human and uploading their photo:
+lamina run abc-123 \
+  --input environment_text="Studio" \
+  --input product_import_product="https://media.../shoe.jpg" \
+  --output "Front View" \
+  --output "Back View" \
+  --wait --json
+# Workflow runs ONLY the Front View + Back View nodes (saves credits vs all 4)
+```
+
+Worked example — brief doesn't subset outputs:
+
+```bash
+# Brief: "Product catalog shoot for my new sneaker"
+lamina content plan "<that brief>" --modality image --json
+# → response.data has no selectedOutputs field
+
+lamina run abc-123 \
+  --input environment_text="Studio" \
+  --input product_import_product="https://media.../shoe.jpg" \
+  --wait --json
+# Workflow runs ALL declared outputs (default)
 ```
 
 ### `mode: 'recipe'`
@@ -425,21 +493,66 @@ The download only fires when the run reaches terminal — on chunked polls
 of a long job, add `--download <path>` to every poll; it quietly does
 nothing until the poll that finally catches terminal.
 
+## Selecting a subset of an app's outputs — `--output <label>`
+
+Many apps produce multiple outputs (e.g. Swift Catalog produces *Front
+View*, *Side View*, *Back View*, *Lifestyle View*, ...). When the user's
+brief implies they want only some of those, pass `--output "<label>"`
+on `lamina run` (repeatable). The labels are visible in
+`lamina apps get <appId>`'s `outputs[]` section.
+
+```bash
+# Get only Front + Side from Swift Catalog instead of all 5 outputs
+lamina run 19fdcc86-... \
+  --input front_image_url="<url>" \
+  --input back_image_url="<url>" \
+  --output "Front View" --output "Side View" \
+  --wait --download "./catalog/" --json
+```
+
+- Label match is **case-insensitive**.
+- If a label matches multiple output nodes (rare — authors usually
+  curate via the studio's output-display settings), all matching outputs
+  run.
+- Unknown labels error with the full list of available outputs.
+- Omit `--output` entirely → full workflow runs (all outputs). Same as
+  before this flag existed.
+
+Selecting a subset skips the un-needed parts of the workflow — faster
++ fewer credits. Useful when the user explicitly names which views /
+variants / cuts they want from a multi-output app.
+
+When `lamina content plan` returns `data.selectedOutputs`, the router has
+already done this matching for you — see the **Dispatching a plan ›
+`mode: 'app'`** section above for the full dispatch shape.
+
 ## Anti-drift rules (when NOT to re-call plan)
 
 - **Never re-call `lamina content plan` to resolve askUser items.** The agent
   made a decision in turn 1 (`selectedApp.appId` or `recipe`). Re-calling plan
   would run the LLM again and may pick a different app or model — silent
   drift. The asks loop **always** dispatches through `lamina run`.
-- **DO re-call `plan` with a refined brief** ONLY when the response is
-  `status: "needs_clarification"`. That's the explicit signal that the
-  agent didn't commit to anything yet and needs a tighter brief. (Re-calling
-  on `unmatched` won't help — that status means the brief is outside
-  Lamina's surface entirely; rephrase or use a different tool.)
+- **DO re-call `lamina content plan` to resolve `needs_clarification` items.**
+  That status means the agent did NOT commit yet — it paused for a strategic
+  answer (preset customization, ambiguous routing, missing platform/scope).
+  Ask the human each clarification, fold answers into a refined brief, then
+  re-call plan. This is the explicit exception to the anti-drift rule.
+- **The distinction matters:**
+  | Response field | What it is | Resolve via |
+  |---|---|---|
+  | `data.askUser[i]` (inside `status: 'plan'`) | Value needed for a specific named app param | `lamina run --input <name>=<answer>` |
+  | `data.clarifications[i]` (inside `status: 'needs_clarification'`) | Strategic choice that changes what the agent commits to | Re-call `lamina content plan` with refined brief |
+- **`unmatched` is terminal.** Brief is outside Lamina's surface entirely —
+  rephrase the brief or use a different tool; don't retry the same brief.
 - **Always `lamina assets upload <path>` for local file paths** in askUser
   answers before passing as `--input` values. Asset params expect URLs, not paths.
 - **`lamina runs wait <runId>` is polymorphic** — works for both app runs and
   recipe runs. No need to remember which mode you dispatched.
+- **Cancel orphaned runs** — if the user changes their mind after dispatch
+  (wrong inputs, oversized variant set, abandoned long job) call
+  `lamina runs cancel <runId>`. It's idempotent: already-terminal runs return
+  their current status without erroring. Don't just stop polling — a queued
+  or running execution keeps burning credits until canceled or completed.
 
 ## Webhooks (production receivers, dev loop, and what agents should do)
 
