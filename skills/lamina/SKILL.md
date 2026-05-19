@@ -101,7 +101,8 @@ automatically. This skill teaches you the canonical flow and the rules.
 | `lamina runs get <runId>` | Snapshot run status |
 | `lamina runs wait <runId>` | Block until terminal |
 | `lamina runs cancel <runId>` | Cancel a queued/running execution (idempotent) |
-| `lamina content plan "<brief>"` | Brief → app or recipe routing (LLM, never dispatches). Returns a plan you act on with `lamina run`. |
+| `lamina content create "<brief>"` | Brief → run a workflow. Router picks an app (or recipe), drafts inputs, **auto-dispatches when sufficient**; otherwise returns `needs_input` / `needs_clarification`. |
+| `lamina content plan "<brief>"` | Preview-only sibling of `create`. Same routing tree but NEVER dispatches. Use for dry-runs, debug, CI preview. |
 | `lamina run <appId> ...` | Execute a catalog app (deterministic, no LLM). Add `--output "<label>"` (repeatable) to run only a subset of the app's outputs. |
 | `lamina run --recipe-file <path> ...` | Execute a freestyle recipe from `~/.lamina/recipes/...` |
 | `lamina webhook status` / `lamina webhook clear` | Inspect / clear the saved default webhook URL |
@@ -115,19 +116,20 @@ automatically. This skill teaches you the canonical flow and the rules.
 
 For full options on any command: `lamina <cmd> --help`.
 
-## The canonical agent flow — plan once, then run
+## The canonical agent flow — create from a brief
 
 Two entry patterns depending on how concrete the user's intent is:
 
 - **Known intent** ("use the selfie app", "run app X with these inputs",
   "give me a virtual try-on") → go direct: `lamina apps list --search` →
-  `lamina apps get <appId>` → `lamina run <appId> --input ...`. No `plan`
-  needed. See "Direct app discovery" below for how to search + evaluate.
+  `lamina apps get <appId>` → `lamina run <appId> --input ...`. No
+  `content create` needed. See "Direct app discovery" below.
 - **Vague creative brief** ("make me a hero image", "selfie with Brad
-  Pitt", "moody dawn scene", "cinematic founder shot") → use `plan`.
-  The router agent decides between an app and a freestyle recipe for
-  you, and emits asks for inputs it can't infer. `plan` is the **only**
-  path that can fall back to a recipe — direct app discovery can't.
+  Pitt", "moody dawn scene", "cinematic founder shot") → use
+  `lamina content create`. The router agent decides between an app and
+  a freestyle recipe, drafts inputs, and **dispatches automatically
+  when the brief has enough context**. Otherwise it returns the missing
+  inputs for you to provide via `lamina run`.
 
 The vague-brief flow:
 
@@ -136,30 +138,54 @@ The vague-brief flow:
    lamina assets upload <path> --json
    → grab .data.url; you'll pass it as a --input value below
 
-2. lamina content plan "<the user's brief>" \
+2. lamina content create "<the user's brief>" \
      [--modality image|video] [--platform <name>] [--app-id <pinned-id>] \
      [--input <name>=<value>]* --json
-   → one LLM call. Returns the agent's decision (an app, or a recipe).
+   → one LLM call. Either dispatches the run OR returns asks/clarifications.
 
 3. Branch on data.status:
-     'plan'                → see "Dispatching a plan" below.
-     'needs_clarification' → the agent paused before committing. Ask the
-                             human each item in data.clarifications,
+     'ran'                 → the workflow was dispatched. data.runId is
+                             ready. Poll with `lamina runs wait <runId>`
+                             (or pass --wait on the create call to block
+                             here). Surface outputs to the user.
+     'needs_input'         → the router committed to an app/recipe but
+                             needs specific values you must supply. Ask
+                             the human each item in data.askUser, then
+                             dispatch DETERMINISTICALLY via `lamina run`
+                             with the selectedApp.appId from the response.
+                             NEVER re-call `content create` here — that
+                             would re-roll the router LLM. See
+                             "Dispatching a plan" below.
+     'needs_clarification' → the router paused before committing because
+                             the brief is genuinely ambiguous between TWO
+                             OR MORE apps (true pre-commit ROUTING
+                             ambiguity — e.g. banner vs reel vs video).
+                             Ask the human each item in data.clarifications,
                              fold the answers into a refined brief, then
-                             RE-CALL `lamina content plan`. This is the
-                             ONLY status where re-calling plan is correct.
-     'unmatched'           → brief is outside Lamina's surface (not a visual
-                             creative request, or no model can deliver in
-                             one generation). Tell the human, suggest
-                             rephrasing or a different tool. Never retry.
+                             RE-CALL `lamina content create`. This is the
+                             ONLY status where re-calling create is correct.
+                             NOTE: PRESET option picks and per-app context
+                             questions go through `askUser`, NOT through
+                             `needs_clarification`.
+     'unmatched'           → brief is outside Lamina's surface. Tell the
+                             human; suggest rephrasing. Never retry.
 
 4. Surface outputs to the user. Done.
 ```
 
-`plan` is the **only** LLM-driven step. The dispatch step (`lamina run`) is
-deterministic — pure schema validation + workflow dispatch, no LLM. That
-means **the agent's decision binds**: once `plan` returns a `selectedApp.appId`
-or a recipe, `lamina run` honors it exactly. No drift across turns.
+`lamina content create` is the **only** LLM-driven step. The dispatch step
+(`lamina run`) is deterministic — pure schema validation + workflow
+dispatch, no LLM. That means **the agent's decision binds**: once `create`
+commits to a `selectedApp.appId`, `lamina run` honors it exactly. No drift
+across turns.
+
+### Preview-only sibling: `lamina content plan`
+
+`lamina content plan "<brief>"` runs the same router agent but **never
+dispatches**. Use it when you explicitly want to inspect the routing
+decision before committing — CI dry-runs, debugging which app the router
+picks, manual review before burning credits. For the regular agentic flow,
+use `create`.
 
 ## Direct app discovery (the non-plan path)
 
@@ -254,9 +280,15 @@ Shape of the response data (all fields the agent reads):
 | `selectedApp.appId` | The app the router committed to | first positional arg of `lamina run` |
 | `selectedApp.rationale` | One-sentence why this app fits | informational — surface to human if useful |
 | `draftedInputs` | Inputs the router pre-filled from the brief | one `--input <key>=<value>` per entry |
-| `askUser` *(may be empty)* | Inputs the router couldn't fill from the brief | ask the human → one `--input <name>=<answer>` per entry |
-| `selectedOutputs` *(may be absent)* | Output labels picked because the brief subsetted them | one `--output "<label>"` per entry |
+| `askUser` *(may be empty)* | Questions the human must answer — covers USER-OWNED slots (their photo, logo), PRESET option choices (background, aesthetic — curated options listed INLINE in `question`), output subsetting (when `name === "__outputs"`), and KNOBs the user needs to set | one `--input <name>=<answer>` per entry **EXCEPT** when `name === "__outputs"` (see below) |
+| `selectedOutputs` *(may be absent)* | Output labels the router picked already (envelope narrowing — broader app delivered as the narrow subset the brief asked for) | one `--output "<label>"` per entry |
 | `warnings` *(may be empty)* | Soft mismatches (e.g. brief said 9:16 but app has no aspect param) | surface to human as FYI; doesn't block dispatch |
+
+**Reading `askUser` correctly — three flavors:**
+
+1. **USER-OWNED slot** (e.g. `name: "product_image_1_image_url"`): the human supplies a URL (or local path → `lamina assets upload` first). Pass as `--input <name>=<url>`.
+2. **PRESET option choice** (e.g. `name: "background_text"`, question lists `Beach / Desert / Tropical / Urban / ... or say 'default'`): surface the **option list verbatim** to the human — they can't guess what's available. Their answer is one of the listed labels OR the literal string `default`. Pass as `--input <name>=<chosen-label>` (omit entirely if they said `default` — the app's curated default fires automatically).
+3. **`__outputs` (reserved name)** — fires when the brief is silent on which of an app's semantically-distinct outputs to produce. Question describes the available output labels. Human answers with a list (comma-separated or one per line). Pass each as `--output "<label>"` (NOT `--input` — `__outputs` is never a real app parameter).
 
 Procedure:
 
@@ -526,22 +558,23 @@ When `lamina content plan` returns `data.selectedOutputs`, the router has
 already done this matching for you — see the **Dispatching a plan ›
 `mode: 'app'`** section above for the full dispatch shape.
 
-## Anti-drift rules (when NOT to re-call plan)
+## Anti-drift rules (when NOT to re-call create / plan)
 
-- **Never re-call `lamina content plan` to resolve askUser items.** The agent
-  made a decision in turn 1 (`selectedApp.appId` or `recipe`). Re-calling plan
-  would run the LLM again and may pick a different app or model — silent
-  drift. The asks loop **always** dispatches through `lamina run`.
-- **DO re-call `lamina content plan` to resolve `needs_clarification` items.**
-  That status means the agent did NOT commit yet — it paused for a strategic
+- **Never re-call `lamina content create` or `lamina content plan` to resolve
+  askUser items.** The router committed to an app/recipe in turn 1
+  (`selectedApp.appId` or `recipe`). Re-calling the router would run the LLM
+  again and may pick a different app or model — silent drift. The asks loop
+  **always** dispatches through `lamina run` (which is deterministic, no LLM).
+- **DO re-call (the same command) to resolve `needs_clarification` items.**
+  That status means the router did NOT commit yet — it paused for a strategic
   answer (preset customization, ambiguous routing, missing platform/scope).
   Ask the human each clarification, fold answers into a refined brief, then
-  re-call plan. This is the explicit exception to the anti-drift rule.
+  re-call the same command. This is the explicit exception.
 - **The distinction matters:**
   | Response field | What it is | Resolve via |
   |---|---|---|
-  | `data.askUser[i]` (inside `status: 'plan'`) | Value needed for a specific named app param | `lamina run --input <name>=<answer>` |
-  | `data.clarifications[i]` (inside `status: 'needs_clarification'`) | Strategic choice that changes what the agent commits to | Re-call `lamina content plan` with refined brief |
+  | `data.askUser[i]` (inside `status: 'needs_input'` or `'plan'`) | Per-param question on the chosen app — USER-OWNED slot, PRESET option pick (curated options listed inline), `__outputs` subset, or a KNOB the user needs to set | `lamina run --input <name>=<answer>` (or `--output "<label>"` when `name === "__outputs"`) |
+  | `data.clarifications[i]` (inside `status: 'needs_clarification'`) | True pre-commit ROUTING ambiguity — the answer would change which app the router picks (banner vs reel vs video, etc.). NEVER fires for preset choices or per-app context questions | Re-call `lamina content create` (or `plan`) with refined brief |
 - **`unmatched` is terminal.** Brief is outside Lamina's surface entirely —
   rephrase the brief or use a different tool; don't retry the same brief.
 - **Always `lamina assets upload <path>` for local file paths** in askUser

@@ -4,13 +4,15 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { createClientFromAuthContext } from '../lib/config.js';
+import { createClientFromAuthContext, resolveStoredWebhookUrl } from '../lib/config.js';
 import { EXIT, LaminaCliError } from '../lib/errors.js';
 import { parseInlineInputs } from '../lib/inputParser.js';
 import {
   printContentBrief,
+  printContentCreateResult,
   printContentPlan,
   printContentScore,
+  printExecution,
   printJson,
 } from '../lib/output.js';
 import { isJsonMode } from '../lib/outputMode.js';
@@ -21,10 +23,14 @@ High-level natural-language entry points. For low-level (specific app +
 explicit inputs) use \`lamina run\`.
 
 Subcommands:
-  plan <brief>       Brief → server picks an app or freestyle recipe and
-                     drafts inputs. NEVER dispatches — returns a plan you
-                     then act on with \`lamina run\` (app mode) or
-                     \`lamina run --recipe-file <path>\` (recipe mode).
+  create <brief>     Brief → run a workflow. The router picks an app (or
+                     falls back to a freestyle recipe), drafts inputs, and
+                     dispatches automatically when the brief has enough
+                     context. Otherwise returns the missing inputs for the
+                     caller to provide via \`lamina run\`.
+  plan <brief>       Preview only — same routing as \`create\` but never
+                     dispatches. Use when you want to inspect the plan
+                     before committing.
   brief <goal>       Goal → concept ideas (no dispatch).
   score              Score this workspace's published content against
                      brand standards.
@@ -32,14 +38,95 @@ Subcommands:
 Run \`lamina content <subcommand> --help\` for subcommand options.
 `;
 
+const CREATE_HELP = `Usage: lamina content create "<brief>" [options]
+
+Send a brief to the content router agent and run a workflow. Same routing
+as \`lamina content plan\` (catalog app OR freestyle recipe fallback,
+drafted inputs, asks, clarifications) PLUS auto-dispatch when the brief
+has enough context to commit safely.
+
+Returns one of four shapes keyed on \`data.status\`:
+
+  • status: "ran" + mode: "app"
+      response.data includes: runId, selectedApp, draftedInputs, warnings
+      Next: \`lamina runs wait <runId>\` (or pass --wait to block here).
+
+  • status: "ran" + mode: "recipe"
+      response.data includes: runId, recipe, modality, picks, numVariants,
+      submittedCount, failedCount, warnings
+      Next: \`lamina runs wait <runId>\` (or pass --wait).
+
+  • status: "needs_input" + mode: "app"
+      response.data includes: selectedApp, draftedInputs, askUser[],
+      warnings, selectedOutputs? (when brief subsets outputs)
+      Next: ask the human each askUser question, then dispatch with
+        lamina run <selectedApp.appId> --input <each drafted-key>=<value> \\
+          --input <each asked-name>=<answer> \\
+          --output "<each selectedOutputs label>"   (if present)
+          --wait --json
+
+  • status: "needs_input" + mode: "recipe"
+      response.data includes: recipe, recipeFile, modality, askUser[], warnings
+      Next: ask the human, then dispatch with
+        lamina run --recipe-file <recipeFile> --input <answers> --wait --json
+
+  • status: "needs_clarification"
+      response.data includes: clarifications[]
+      The agent paused before committing — it needs a strategic answer
+      (preset customization, ambiguous routing, missing platform/scope).
+      Next: ask the human each clarification, fold answers into a refined
+      brief, then re-call THIS command. This is the ONLY status where
+      re-calling \`lamina content create\` is the correct response.
+
+  • status: "unmatched"
+      Brief is outside Lamina's surface (e.g. not a visual creative
+      request, or beyond model ceilings). Tell the human; do not retry.
+
+ANTI-DRIFT: on \`needs_input\`, NEVER re-call \`lamina content create\` to
+resolve askUser items — that re-rolls the router LLM and could pick a
+different app. Resolve asks deterministically via \`lamina run\` with the
+selectedApp.appId from the response.
+
+Options:
+  --input <name>=<value>     Pre-supply an input the router would otherwise
+                             ask for. Repeatable. Useful when the brief
+                             needs an asset URL you already have.
+  --platform <name>          Target platform hint (e.g. instagram, tiktok).
+  --modality <kind>          Modality hint: image | video.
+  --app-id <uuid>            Skip ranking and pin to this app directly.
+  --brand-profile-id <uuid>  Apply a specific brand profile.
+  --num-variants <n>         Variant count when the agent goes freestyle.
+  --webhook <url|default>    Per-call webhook URL; "default" reuses the
+                             saved listener URL. Omit to use the saved
+                             default (if any).
+  --no-webhook               Disable webhook for this call.
+  --wait                     If the response is "ran", block until the run
+                             reaches a terminal state.
+  --timeout-ms <ms>          Max wait time, default 240000 (with --wait).
+  --interval-ms <ms>         Poll interval, default 2000 (with --wait).
+  --json                     Emit the raw API envelope.
+  --help, -h                 Show this help.
+
+Examples:
+  lamina content create "a selfie with Tom Holland" --modality image
+  lamina content create "selfie with Tom Holland" --modality image \\
+    --input your_photo_image_url=https://media.getmason.io/abc.jpg --wait
+  lamina content create "catalog shoot, just the front view" --modality image
+  lamina content create "spring IG carousel" --platform instagram
+
+Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials.
+`;
+
 const PLAN_HELP = `Usage: lamina content plan "<brief>" [options]
 
-Send a brief to the content router agent. The agent picks the best app
-(or falls back to a freestyle recipe when nothing fits), drafts inputs
-from the brief, and emits open questions for inputs it cannot infer.
+Preview-only counterpart of \`lamina content create\`. Same router agent,
+same routing tree (apps + recipes), same drafted inputs + asks — but this
+command NEVER dispatches a run. Use \`lamina content create\` for the
+auto-dispatching workflow; use \`plan\` only when you explicitly want a
+preview (CI dry-runs, debugging routing decisions, manual review before
+committing credits).
 
-This command NEVER dispatches a run. It returns one of four shapes
-keyed on \`data.status\`:
+Returns one of four shapes keyed on \`data.status\`:
 
   • status: "plan" + mode: "app"
       response.data includes:
@@ -142,6 +229,9 @@ export async function handleContentCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (subcommand === 'create') {
+    return handleCreate(args.slice(1));
+  }
   if (subcommand === 'plan') {
     return handlePlan(args.slice(1));
   }
@@ -152,25 +242,143 @@ export async function handleContentCommand(args: string[]): Promise<void> {
     return handleScore(args.slice(1));
   }
 
-  // `create` was the legacy regex-based dispatcher. Routing was unreliable for
-  // apps that need user-asset URLs (selfies, product shoots). Dropped in
-  // favour of `plan`, which is honest about what it can and can't draft.
-  if (subcommand === 'create') {
-    throw new LaminaCliError({
-      code: 'unknown_subcommand',
-      exitCode: EXIT.INVALID_USAGE,
-      message: '`lamina content create` was removed.',
-      suggestion:
-        'Use `lamina content plan "<brief>"` to get a routing decision (app or recipe + drafted inputs + open questions), then dispatch deterministically with `lamina run`.',
-    });
-  }
-
   throw new LaminaCliError({
     code: 'unknown_subcommand',
     exitCode: EXIT.INVALID_USAGE,
     message: `Unknown subcommand: "lamina content ${subcommand}".`,
     suggestion: 'Run `lamina content --help` for valid subcommands.',
   });
+}
+
+async function handleCreate(args: string[]): Promise<void> {
+  if (args[0] === '--help' || args[0] === '-h') {
+    process.stdout.write(CREATE_HELP);
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args,
+      options: {
+        input: { type: 'string', multiple: true },
+        platform: { type: 'string' },
+        modality: { type: 'string' },
+        'app-id': { type: 'string' },
+        'brand-profile-id': { type: 'string' },
+        'num-variants': { type: 'string' },
+        webhook: { type: 'string' },
+        'no-webhook': { type: 'boolean' },
+        wait: { type: 'boolean' },
+        'timeout-ms': { type: 'string' },
+        'interval-ms': { type: 'string' },
+        json: { type: 'boolean' },
+        help: { type: 'boolean', short: 'h' },
+      },
+      allowPositionals: true,
+    });
+  } catch (err) {
+    throw new LaminaCliError({
+      code: 'invalid_argument',
+      exitCode: EXIT.INVALID_USAGE,
+      message: (err as Error).message,
+      suggestion: 'Run `lamina content create --help` for usage.',
+    });
+  }
+
+  if (parsed.values.help) {
+    process.stdout.write(CREATE_HELP);
+    return;
+  }
+
+  const brief = parsed.positionals.join(' ').trim();
+  if (!brief) {
+    process.stdout.write(CREATE_HELP);
+    throw new LaminaCliError({
+      code: 'invalid_argument',
+      exitCode: EXIT.INVALID_USAGE,
+      message: 'Missing brief.',
+      suggestion: 'Example: lamina content create "a selfie with Tom Holland" --modality image',
+    });
+  }
+
+  const inlineInputs = parseInlineInputs(parsed.values.input || []);
+  const hasInputs = Object.keys(inlineInputs).length > 0;
+
+  const numVariantsRaw = parsed.values['num-variants'];
+  const numVariants = numVariantsRaw ? Number.parseInt(numVariantsRaw, 10) : undefined;
+
+  // Resolve webhook: explicit --webhook, --no-webhook opt-out, or saved default.
+  let webhookUrl: string | undefined;
+  if (parsed.values['no-webhook']) {
+    webhookUrl = undefined;
+  } else if (parsed.values.webhook) {
+    const resolved = await resolveStoredWebhookUrl(parsed.values.webhook);
+    webhookUrl = resolved.webhookUrl || undefined;
+  } else {
+    const resolved = await resolveStoredWebhookUrl('default');
+    webhookUrl = resolved.webhookUrl || undefined;
+  }
+
+  const { client } = await createClientFromAuthContext();
+
+  const response = await client.content.create({
+    brief,
+    platform: parsed.values.platform,
+    modality: parsed.values.modality,
+    appId: parsed.values['app-id'],
+    brandProfileId: parsed.values['brand-profile-id'],
+    inputs: hasInputs ? inlineInputs : undefined,
+    numVariants,
+    ...(webhookUrl ? { webhookUrl } : {}),
+  } as Parameters<typeof client.content.create>[0]);
+
+  // For `mode: 'recipe'` `needs_input` responses, write the recipe JSON to a
+  // local file so the calling agent can dispatch via `lamina run --recipe-file`.
+  // Same convention as `lamina content plan`.
+  let recipeFile: string | undefined;
+  if (
+    response.data.status === 'needs_input' &&
+    response.data.mode === 'recipe' &&
+    response.data.recipe
+  ) {
+    try {
+      recipeFile = await writeRecipeFile(response.data.recipe);
+      void cleanupOldRecipes();
+    } catch (err) {
+      process.stderr.write(
+        `Warning: failed to write recipe to ~/.lamina/recipes/: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  // If --wait and dispatched: block until terminal and print outputs.
+  const shouldWait = parsed.values.wait && response.data.status === 'ran';
+  if (shouldWait && response.data.status === 'ran') {
+    const intervalMs = parsed.values['interval-ms']
+      ? Number.parseInt(parsed.values['interval-ms'], 10)
+      : 2000;
+    const timeoutMs = parsed.values['timeout-ms']
+      ? Number.parseInt(parsed.values['timeout-ms'], 10)
+      : 240000;
+    const completed = await client.runs.wait(response.data.runId, { intervalMs, timeoutMs });
+    if (parsed.values.json || isJsonMode()) {
+      printJson(completed);
+    } else {
+      printExecution(completed.data);
+    }
+    return;
+  }
+
+  if (parsed.values.json || isJsonMode()) {
+    const augmented = recipeFile
+      ? { ...response, data: { ...response.data, recipeFile } }
+      : response;
+    printJson(augmented);
+    return;
+  }
+
+  printContentCreateResult(response.data, { recipeFile });
 }
 
 async function handlePlan(args: string[]): Promise<void> {

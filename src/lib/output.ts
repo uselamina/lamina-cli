@@ -9,6 +9,7 @@ import type {
   ContentPlanResult,
   ExecutionStarted,
   ExecutionStatus,
+  LaminaCreateResult,
   LaminaWebhookListenerEvent,
   PerformancePrediction,
   PublishHistoryItem,
@@ -555,6 +556,194 @@ export function printPublishHistory(data: PublishHistoryItem[]): void {
  * recipe-file save itself happens in the `handlePlan` command (output.ts is
  * just rendering).
  */
+/**
+ * Pretty-print the `lamina content create` response. Mirrors
+ * `printContentPlan` for the routing-decision branches (plan + asks,
+ * needs_clarification, unmatched) and adds a `ran` branch for the
+ * auto-dispatched path. Recipe file storage happens upstream in
+ * `handleCreate`; this function just renders.
+ */
+export function printContentCreateResult(
+  data: LaminaCreateResult,
+  options: { recipeFile?: string } = {}
+): void {
+  if (data.status === 'unmatched') {
+    process.stdout.write(`Status: unmatched\n`);
+    if (data.reason) process.stdout.write(`Reason: ${data.reason}\n`);
+    if (data.errors && data.errors.length > 0) {
+      process.stdout.write(`Errors:\n`);
+      for (const err of data.errors) {
+        process.stdout.write(`  - ${err}\n`);
+      }
+    }
+    return;
+  }
+
+  if (data.status === 'needs_clarification') {
+    process.stdout.write(`Status:  needs_clarification\n`);
+    process.stdout.write(
+      `\nThe router paused before committing — it needs a strategic answer\n` +
+        `from you before it can pick the right app or recipe.\n`
+    );
+    if (data.clarifications.length > 0) {
+      process.stdout.write(`\nClarifications (${data.clarifications.length}):\n`);
+      for (const c of data.clarifications) {
+        process.stdout.write(`  - ${c.question}\n`);
+      }
+    }
+    process.stdout.write(
+      `\nNext: answer each question, fold the answers into a refined brief,\n` +
+        `then re-call \`lamina content create\`. This is the ONLY status where\n` +
+        `re-calling create is the correct move.\n`
+    );
+    return;
+  }
+
+  if (data.status === 'ran') {
+    process.stdout.write(`Status:      ran\n`);
+    process.stdout.write(`Run ID:      ${data.runId}\n`);
+
+    if (data.mode === 'app') {
+      process.stdout.write(`Mode:        app\n`);
+      process.stdout.write(`App:         ${data.selectedApp.name} (${data.selectedApp.appId})\n`);
+      if (data.selectedApp.rationale) {
+        process.stdout.write(`Why picked:  ${data.selectedApp.rationale}\n`);
+      }
+      const draftedKeys = Object.keys(data.draftedInputs);
+      if (draftedKeys.length > 0) {
+        process.stdout.write(`\nDrafted inputs (${draftedKeys.length}):\n`);
+        for (const key of draftedKeys) {
+          const value = data.draftedInputs[key];
+          const display = typeof value === 'string' ? value : JSON.stringify(value);
+          const truncated = display.length > 80 ? `${display.slice(0, 77)}…` : display;
+          process.stdout.write(`  ${key} = ${truncated}\n`);
+        }
+      }
+    } else {
+      process.stdout.write(`Mode:        recipe (${data.modality})\n`);
+      const variantCount = data.recipe?.variants?.length ?? 0;
+      process.stdout.write(`Variants:    ${variantCount}\n`);
+      if (data.picks) process.stdout.write(`Picks:       ${data.picks}\n`);
+      process.stdout.write(`Submitted:   ${data.submittedCount}/${data.numVariants}\n`);
+      if (data.failedCount > 0) {
+        process.stdout.write(`Failed:      ${data.failedCount}\n`);
+      }
+    }
+
+    if (data.warnings.length > 0) {
+      process.stdout.write(`\nWarnings (${data.warnings.length}):\n`);
+      for (const w of data.warnings) {
+        process.stdout.write(`  ${w.field}: ${w.message}\n`);
+      }
+    }
+
+    process.stdout.write(
+      `\nNext:\n` +
+        `  lamina runs wait ${data.runId} --timeout-ms 120000 --json\n` +
+        `(or re-run \`lamina content create\` with --wait to block here)\n`
+    );
+    return;
+  }
+
+  // status === 'needs_input'
+  process.stdout.write(`Status:      needs_input\n`);
+
+  if (data.mode === 'app') {
+    process.stdout.write(`Mode:        app\n`);
+    process.stdout.write(`App:         ${data.selectedApp.name} (${data.selectedApp.appId})\n`);
+    if (data.selectedApp.rationale) {
+      process.stdout.write(`Why picked:  ${data.selectedApp.rationale}\n`);
+    }
+
+    const draftedKeys = Object.keys(data.draftedInputs);
+    if (draftedKeys.length > 0) {
+      process.stdout.write(`\nDrafted inputs (${draftedKeys.length}):\n`);
+      for (const key of draftedKeys) {
+        const value = data.draftedInputs[key];
+        const display = typeof value === 'string' ? value : JSON.stringify(value);
+        const truncated = display.length > 80 ? `${display.slice(0, 77)}…` : display;
+        process.stdout.write(`  ${key} = ${truncated}\n`);
+      }
+    }
+
+    const selectedOutputs = data.selectedOutputs;
+    if (selectedOutputs && selectedOutputs.length > 0) {
+      process.stdout.write(`\nSelected outputs (${selectedOutputs.length}):\n`);
+      for (const label of selectedOutputs) {
+        process.stdout.write(`  - ${label}\n`);
+      }
+    }
+
+    if (data.warnings.length > 0) {
+      process.stdout.write(`\nWarnings (${data.warnings.length}):\n`);
+      for (const w of data.warnings) {
+        process.stdout.write(`  ${w.field}: ${w.message}\n`);
+      }
+    }
+
+    const outputFlagsBlock =
+      selectedOutputs && selectedOutputs.length > 0
+        ? selectedOutputs.map((l: string) => `    --output ${JSON.stringify(l)} \\\n`).join('')
+        : '';
+
+    if (data.askUser.length > 0) {
+      process.stdout.write(`\nNeed from you (${data.askUser.length}):\n`);
+      for (const item of data.askUser) {
+        process.stdout.write(`  ${item.name}: ${item.question}\n`);
+      }
+    }
+    process.stdout.write(
+      `\nNext: collect answers, then dispatch deterministically:\n` +
+        `  lamina run ${data.selectedApp.appId} \\\n` +
+        `    --input <each drafted-key>=<value> \\\n` +
+        `    --input <each asked-name>=<answer> \\\n` +
+        outputFlagsBlock +
+        `    --wait --json\n` +
+        `\n(Do NOT re-call \`lamina content create\` to resolve asks —\n` +
+        ` that would re-roll the router LLM. Use \`lamina run\` directly.)\n`
+    );
+    return;
+  }
+
+  // mode === 'recipe'
+  process.stdout.write(`Mode:        recipe (${data.modality})\n`);
+  const variantCount = data.recipe?.variants?.length ?? 0;
+  process.stdout.write(`Variants:    ${variantCount}\n`);
+  if (data.recipe?.reason) {
+    process.stdout.write(`Why:         ${data.recipe.reason}\n`);
+  }
+  if (options.recipeFile) {
+    process.stdout.write(`Recipe file: ${options.recipeFile}\n`);
+  }
+
+  if (data.warnings.length > 0) {
+    process.stdout.write(`\nWarnings (${data.warnings.length}):\n`);
+    for (const w of data.warnings) {
+      process.stdout.write(`  ${w.field}: ${w.message}\n`);
+    }
+  }
+
+  if (data.askUser.length > 0) {
+    process.stdout.write(`\nNeed from you (${data.askUser.length}):\n`);
+    for (const item of data.askUser) {
+      process.stdout.write(`  ${item.name}: ${item.question}\n`);
+    }
+    if (options.recipeFile) {
+      process.stdout.write(
+        `\nNext: collect answers, then dispatch deterministically:\n` +
+          `  lamina run --recipe-file ${options.recipeFile} \\\n` +
+          `    --input <each asked-name>=<answer> \\\n` +
+          `    --wait --json\n`
+      );
+    }
+  } else if (options.recipeFile) {
+    process.stdout.write(
+      `\nReady to dispatch:\n` +
+        `  lamina run --recipe-file ${options.recipeFile} --wait --json\n`
+    );
+  }
+}
+
 export function printContentPlan(
   data: ContentPlanResult,
   options: { recipeFile?: string } = {}
