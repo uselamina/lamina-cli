@@ -30,7 +30,8 @@ Options:
 const WAIT_HELP = `Usage: lamina runs wait <runId> [options]
 
 Block until the run reaches a terminal state (completed / failed / cancelled).
-Polymorphic — works for both app runs and freestyle recipe runs.
+Polymorphic — works for app runs, freestyle recipe runs, and atomic
+generate runs (\`lamina generate image\`).
 
 To avoid hanging the chat session indefinitely, keep --timeout-ms bounded
 (≤180000ms) and re-call this command if the previous wait timed out without
@@ -141,12 +142,39 @@ async function handleGet(args: string[]): Promise<void> {
   }
 
   const { client } = await createClientFromAuthContext();
-  const response = await client.runs.get(runId);
+
+  // Polymorphic over three run kinds: atomic image-gen, app workflow, freestyle.
+  // Try atomic first — cheapest lookup (one indexed SELECT on fal_requests).
+  // Fall through on 404 to the other two surfaces.
+  let response: unknown;
+  let kind: 'atomic' | 'workflow' | 'freestyle' = 'workflow';
+  try {
+    response = await client.generate.getRun(runId);
+    kind = 'atomic';
+  } catch (atomicErr) {
+    if (!isLikelyNotFound(atomicErr)) throw atomicErr;
+    try {
+      response = await client.runs.get(runId);
+      kind = 'workflow';
+    } catch (workflowErr) {
+      if (!isLikelyNotFound(workflowErr)) throw workflowErr;
+      response = await client.freestyle.get(runId);
+      kind = 'freestyle';
+    }
+  }
+
   if (parsed.values.json || isJsonMode()) {
     printJson(response);
-  } else {
-    printExecution(response.data);
+    return;
   }
+  if (kind === 'atomic' || kind === 'freestyle') {
+    // Atomic + freestyle have their own response shapes — print JSON until
+    // we have dedicated renderers. Atomic is shallow enough to read at a
+    // glance; freestyle is variant-shaped.
+    printJson(response);
+    return;
+  }
+  printExecution((response as { data: any }).data);
 }
 
 async function handleWait(args: string[]): Promise<void> {
@@ -192,43 +220,62 @@ async function handleWait(args: string[]): Promise<void> {
       : 240000,
   };
 
-  // Polymorphic: a runId might belong to either an app workflow run
-  // (/v1/runs/<runId>) or a freestyle/recipe run (/v1/freestyle/<runId>).
-  // Try the app endpoint first; on 404 fall back to freestyle. Either way
-  // the agent gets one wait command to learn instead of branching by mode.
-  let response;
-  let isFreestyle = false;
+  // Polymorphic across three run kinds: atomic image-gen, app workflow,
+  // freestyle/recipe. Try atomic first (cheapest), then app, then freestyle.
+  // On 404 from one path, fall through to the next.
+  let response: any;
+  let kind: 'atomic' | 'workflow' | 'freestyle' = 'workflow';
   try {
-    response = await client.runs.wait(runId, waitOptions);
-  } catch (err) {
-    if (isLikelyNotFound(err)) {
+    response = await client.generate.wait(runId, waitOptions);
+    response = { data: response };               // normalize: generate.wait returns the data directly
+    kind = 'atomic';
+  } catch (atomicErr) {
+    if (!isLikelyNotFound(atomicErr)) throw atomicErr;
+    try {
+      response = await client.runs.wait(runId, waitOptions);
+      kind = 'workflow';
+    } catch (workflowErr) {
+      if (!isLikelyNotFound(workflowErr)) throw workflowErr;
       response = await client.freestyle.wait(runId, waitOptions);
-      isFreestyle = true;
-    } else {
-      throw err;
+      kind = 'freestyle';
     }
   }
 
   const template = parsed.values.download as string | undefined;
   let downloads: DownloadedFile[] | null = null;
   if (template) {
-    const outputs = ((response as { data?: { outputs?: RunOutput[] } }).data?.outputs ?? []) as RunOutput[];
+    // Atomic runs have `output` (singular); workflow/freestyle have `outputs[]`.
+    // Normalize both to an array for the downloader.
+    const data = (response as { data?: { outputs?: RunOutput[]; output?: { type?: string; url?: string | null } | null; downloads?: DownloadedFile[] } }).data;
+    let outputs: RunOutput[] = [];
+    if (Array.isArray(data?.outputs)) {
+      outputs = data.outputs;
+    } else if (data?.output && typeof data.output === 'object') {
+      outputs = [
+        {
+          value: data.output.url ?? null,
+          outputType: data.output.type ?? 'image',
+          nodeLabel: null,
+        } as RunOutput,
+      ];
+    }
     downloads = await downloadOutputs({ runId, outputs, template });
-    const data = (response as { data?: { downloads?: DownloadedFile[] } }).data;
     if (data) data.downloads = downloads;
   }
 
   if (parsed.values.json || isJsonMode()) {
     printJson(response);
-  } else if (isFreestyle) {
-    // Freestyle completion has a different shape; pretty-print as JSON until
-    // we have a dedicated renderer.
+    return;
+  }
+  if (kind === 'atomic' || kind === 'freestyle') {
+    // Atomic + freestyle have their own response shapes — pretty-print as
+    // JSON until they get dedicated renderers.
     printJson(response);
     if (downloads && downloads.length > 0) printDownloads(downloads);
-  } else {
-    printExecution(response.data);
-    if (downloads && downloads.length > 0) printDownloads(downloads);
+    return;
   }
+  printExecution(response.data);
+  if (downloads && downloads.length > 0) printDownloads(downloads);
 }
 
 async function handleCancel(args: string[]): Promise<void> {

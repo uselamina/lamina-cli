@@ -43,6 +43,13 @@ export interface LaminaCliErrorOptions {
   suggestion?: string;
   docsUrl?: string;
   cause?: unknown;
+  /**
+   * Structured server-side details for the error (e.g. validation error
+   * field list). Surfaced in --json output so coding agents can read each
+   * `errors[].field` and self-correct on retry without re-parsing the
+   * human-readable message.
+   */
+  details?: unknown;
 }
 
 export class LaminaCliError extends Error {
@@ -50,6 +57,7 @@ export class LaminaCliError extends Error {
   readonly exitCode: 1 | 2;
   readonly suggestion?: string;
   readonly docsUrl?: string;
+  readonly details?: unknown;
 
   constructor(options: LaminaCliErrorOptions) {
     super(options.message, { cause: options.cause });
@@ -58,6 +66,7 @@ export class LaminaCliError extends Error {
     this.exitCode = options.exitCode ?? EXIT.RUNTIME_ERROR;
     this.suggestion = options.suggestion;
     this.docsUrl = options.docsUrl;
+    this.details = options.details;
   }
 }
 
@@ -68,11 +77,26 @@ export class LaminaCliError extends Error {
  * or wrapped server responses. Anything we can't classify ends up as a
  * generic `unknown` runtime error so we never lose the underlying message.
  */
+/**
+ * Extract structured server-side `details` from an SDK error if present.
+ * The /v1 API wraps validation errors as:
+ *   body: { error, code: 'VALIDATION_ERROR', details: { code, message, details: {errors:[...]} } }
+ * We surface the inner envelope so agents can read field-level errors.
+ */
+function extractServerDetails(err: unknown): unknown {
+  if (!err || typeof err !== 'object') return undefined;
+  const body = (err as { body?: unknown }).body;
+  if (!body || typeof body !== 'object') return undefined;
+  const details = (body as { details?: unknown }).details;
+  return details;
+}
+
 export function classifyError(err: unknown): LaminaCliError {
   if (err instanceof LaminaCliError) return err;
 
   const message = err instanceof Error ? err.message : String(err);
   const lower = message.toLowerCase();
+  const details = extractServerDetails(err);
 
   // Network: fetch-failed, DNS, connection refused, timeout
   if (
@@ -122,7 +146,10 @@ export function classifyError(err: unknown): LaminaCliError {
     code: 'unknown',
     message,
     suggestion:
-      'If this looks like a CLI bug, run `lamina docs "<topic>"` for guidance, or update the CLI: `npm install -g @uselamina/cli@latest`.',
+      details
+        ? 'See `details.errors` for the field-level validation errors. Each entry has `field`, `error`, and (when applicable) `allowed` / `range` / `got` — use these to fix your params and retry.'
+        : 'If this looks like a CLI bug, run `lamina docs "<topic>"` for guidance, or update the CLI: `npm install -g @uselamina/cli@latest`.',
+    details,
     cause: err,
   });
 }
@@ -154,12 +181,33 @@ export function printCliError(err: LaminaCliError): void {
     };
     if (err.suggestion) payload.hint = err.suggestion;
     if (err.docsUrl) payload.docsUrl = err.docsUrl;
+    if (err.details !== undefined) payload.details = err.details;
     process.stderr.write(`${JSON.stringify(payload)}\n`);
     return;
   }
   process.stderr.write(`Error: ${err.message}\n`);
   if (err.suggestion) {
     process.stderr.write(`${err.suggestion}\n`);
+  }
+  // Surface field-level validation errors in text mode too — agents using
+  // text mode (or humans inspecting CLI output) need them to self-correct.
+  if (err.details && typeof err.details === 'object') {
+    const d = err.details as { details?: { errors?: Array<Record<string, unknown>> } };
+    const fieldErrors = d.details?.errors;
+    if (Array.isArray(fieldErrors) && fieldErrors.length > 0) {
+      process.stderr.write(`Field errors:\n`);
+      for (const fe of fieldErrors) {
+        const field = fe.field || '?';
+        const code = fe.error || '?';
+        const msg = fe.message ? ` — ${fe.message}` : '';
+        const extra: string[] = [];
+        if (fe.allowed) extra.push(`allowed=${JSON.stringify(fe.allowed)}`);
+        if (fe.range) extra.push(`range=${JSON.stringify(fe.range)}`);
+        if (fe.got !== undefined) extra.push(`got=${JSON.stringify(fe.got)}`);
+        const tail = extra.length ? `  [${extra.join(' ')}]` : '';
+        process.stderr.write(`  • ${field}: ${code}${msg}${tail}\n`);
+      }
+    }
   }
   if (err.docsUrl) {
     process.stderr.write(`See: ${err.docsUrl}\n`);

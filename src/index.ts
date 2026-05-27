@@ -8,11 +8,13 @@ import { handleAppsCommand } from './commands/apps.js';
 import { handleAssetsCommand } from './commands/assets.js';
 import { handleContentCommand } from './commands/content.js';
 import { handleDocsCommand } from './commands/docs.js';
+import { handleGenerateCommand } from './commands/generate.js';
 import { handleInitCommand } from './commands/init.js';
 import { handleIntelligenceCommand } from './commands/intelligence.js';
 import { handleLoginCommand } from './commands/login.js';
 import { handleLogoutCommand } from './commands/logout.js';
 import { handleMcpCommand } from './commands/mcp.js';
+import { handleModelsCommand } from './commands/models.js';
 import { handlePublishingCommand } from './commands/publishing.js';
 import { handleRunCommand } from './commands/run.js';
 import { handleRunsCommand } from './commands/runs.js';
@@ -76,7 +78,9 @@ const COMMAND_HANDLERS: Record<string, (args: string[]) => Promise<void>> = {
   apps: handleAppsCommand,
   assets: handleAssetsCommand,
   content: handleContentCommand,
+  generate: handleGenerateCommand,
   intelligence: handleIntelligenceCommand,
+  models: handleModelsCommand,
   publishing: handlePublishingCommand,
   run: handleRunCommand,
   runs: handleRunsCommand,

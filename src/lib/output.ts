@@ -10,6 +10,9 @@ import type {
   ExecutionStarted,
   ExecutionStatus,
   LaminaCreateResult,
+  LaminaGenerateImageResult,
+  LaminaModelDescribe,
+  LaminaModelSummary,
   LaminaWebhookListenerEvent,
   PerformancePrediction,
   PublishHistoryItem,
@@ -19,6 +22,8 @@ import type {
   TrendPatternSummary,
   WebhookSigningKeyResponse,
 } from '@uselamina/sdk';
+
+import type { DownloadedFile } from './downloadOutputs.js';
 
 function truncate(value: string | null | undefined, max: number): string {
   if (!value) return '';
@@ -31,7 +36,20 @@ function padRight(value: string, len: number): string {
 }
 
 export function printJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  // Strip the top-level `{ data: ... }` envelope before printing so agent
+  // consumers piping `--json` see bare keys (matches MCP tool result shape
+  // and Higgsfield's CLI conventions). The SDK and REST layers still emit
+  // the envelope — only this print boundary unwraps it.
+  let payload: unknown = value;
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    'data' in (value as Record<string, unknown>)
+  ) {
+    payload = (value as Record<string, unknown>).data;
+  }
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
 export function printIdentity(account: AccountResponse): void {
@@ -968,6 +986,10 @@ CORE COMMANDS
   run           Run an app with explicit inputs
   runs          Inspect previously-started runs
   content       Plan and run from a natural-language brief
+  models        Discover atomic models — \`models list\` / \`models describe <id>\`
+  generate      Atomic model-pinned dispatch — \`generate image\` / \`generate video\`
+                (model id discriminates: text-to-image / edit, text-to-video /
+                image-to-video / motion-control / etc. are just different models)
   webhook       Run a local listener for webhook deliveries
 
 ADDITIONAL COMMANDS
@@ -1041,3 +1063,135 @@ export function printVersionJson(
     }, null, 2)}\n`,
   );
 }
+
+// ─── Atomic generate / model discovery renderers ───────────────────────────
+
+/**
+ * Render `lamina models list` results — compact table of curated models.
+ */
+export function printModelsList(
+  models: LaminaModelSummary[],
+  opts: { modality?: string } = {},
+): void {
+  if (!Array.isArray(models) || models.length === 0) {
+    process.stdout.write(`No ${opts.modality || 'image'} models found.\n`);
+    return;
+  }
+  const heading = `Models (modality: ${opts.modality || 'image'})`;
+  process.stdout.write(`${heading}\n`);
+  process.stdout.write(`${'─'.repeat(heading.length)}\n`);
+
+  // Layout: displayName  |  id
+  const nameLen = Math.max(...models.map((m) => (m.displayName || m.id).length), 18);
+  process.stdout.write(`${padRight('NAME', nameLen)}  ID\n`);
+  for (const m of models) {
+    process.stdout.write(`${padRight(m.displayName || m.id, nameLen)}  ${m.id}\n`);
+  }
+  process.stdout.write(
+    `\nNext: \`lamina models describe <id>\` for the paramSchema, then \`lamina generate ${opts.modality || 'image'} --model <id> --prompt "…" --params '<json>'\`.\n`,
+  );
+}
+
+/**
+ * Render `lamina models describe <id>`. Walks the flat `paramSchema` —
+ * `prompt` (when present) appears as a regular field alongside other inputs.
+ */
+export function printModelDescribe(data: LaminaModelDescribe): void {
+  process.stdout.write(`Model:        ${data.id}\n`);
+  if (data.displayName && data.displayName !== data.id) {
+    process.stdout.write(`Name:         ${data.displayName}\n`);
+  }
+  process.stdout.write(`Modality:     ${data.modality}\n`);
+  process.stdout.write(`\nparamSchema (every field accepted in --params):\n`);
+  const fields = Object.entries(data.paramSchema || {});
+  if (fields.length === 0) {
+    process.stdout.write('  (no params declared for this model)\n');
+    return;
+  }
+  for (const [key, schema] of fields) {
+    const req = schema.required ? '  required' : '';
+    const def =
+      schema.default !== undefined ? `  default=${JSON.stringify(schema.default)}` : '';
+    const range =
+      schema.min !== undefined || schema.max !== undefined
+        ? `  range=[${schema.min ?? '-'}..${schema.max ?? '-'}]${schema.step ? ` step=${schema.step}` : ''}`
+        : '';
+    const items =
+      schema.minItems !== undefined || schema.maxItems !== undefined
+        ? `  items=[${schema.minItems ?? 1}..${schema.maxItems ?? '∞'}]`
+        : '';
+    const maxLen = schema.maxLength !== undefined ? `  maxLength=${schema.maxLength}` : '';
+    const values =
+      Array.isArray(schema.values) && schema.values.length > 0
+        ? `  values=${schema.values.join('|')}`
+        : '';
+    process.stdout.write(
+      `  ${padRight(key, 24)}  ${padRight(`(${schema.type})`, 18)}${req}${def}${range}${items}${maxLen}${values}\n`,
+    );
+  }
+  const hasPrompt = !!data.paramSchema?.prompt;
+  const nextCmd =
+    data.modality === 'video'
+      ? `lamina generate video --model ${data.id}${hasPrompt ? ' --prompt "…"' : ''} --params '<json>'`
+      : `lamina generate image --model ${data.id}${hasPrompt ? ' --prompt "…"' : ''} --params '<json>'`;
+  process.stdout.write(`\nNext: \`${nextCmd}\`\n`);
+}
+
+type GenerateImageRenderPayload = LaminaGenerateImageResult & {
+  outputs?: Array<{ value?: string | null; nodeLabel?: string; outputType?: string }> | null;
+  downloads?: DownloadedFile[];
+};
+
+/**
+ * Render `lamina generate image` result.
+ *
+ * Two phases:
+ *   - 'queued'   — dispatch returned a runId; show runId + next step
+ *   - 'terminal' — --wait completed; show outputs (and downloads if any)
+ */
+export function printGenerateImageResult(
+  data: GenerateImageRenderPayload,
+  opts: { phase: 'queued' | 'terminal'; finalStatus?: string } = { phase: 'queued' },
+): void {
+  process.stdout.write(`Model:        ${data.model}\n`);
+  const promptVal = (data.resolvedParams as Record<string, unknown> | undefined)?.prompt;
+  if (typeof promptVal === 'string' && promptVal.length > 0) {
+    process.stdout.write(`Prompt:       ${truncate(promptVal, 200)}\n`);
+  }
+  if (data.resolvedParams && Object.keys(data.resolvedParams).length > 0) {
+    const { prompt: _omit, ...rest } = data.resolvedParams as Record<string, unknown>;
+    if (Object.keys(rest).length > 0) {
+      process.stdout.write(`Params:       ${JSON.stringify(rest)}\n`);
+    }
+  }
+  process.stdout.write(`Run ID:       ${data.runId}\n`);
+
+  if (opts.phase === 'queued') {
+    process.stdout.write(`Status:       queued\n`);
+    process.stdout.write(
+      `\nNext: \`lamina runs wait ${data.runId}\` to block until complete (or pass --wait next time).\n`,
+    );
+    return;
+  }
+
+  const finalStatus = opts.finalStatus || data.status;
+  process.stdout.write(`Status:       ${finalStatus}\n`);
+
+  if (finalStatus === 'completed' && Array.isArray(data.outputs)) {
+    process.stdout.write(`\nOutputs:\n`);
+    data.outputs.forEach((o, idx) => {
+      const label = o.nodeLabel ? ` (${o.nodeLabel})` : '';
+      const kind = o.outputType ? ` ${o.outputType}` : '';
+      process.stdout.write(`  [${idx}]${kind}${label}: ${o.value || '(pending)'}\n`);
+    });
+  }
+
+  if (Array.isArray(data.downloads) && data.downloads.length > 0) {
+    process.stdout.write(`\nDownloaded ${data.downloads.length} file(s):\n`);
+    for (const d of data.downloads) {
+      const kb = (d.bytes / 1024).toFixed(1);
+      process.stdout.write(`  outputs[${d.outputIndex}] → ${d.localPath} (${kb} KB)\n`);
+    }
+  }
+}
+

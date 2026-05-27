@@ -11,7 +11,7 @@ description: >
   `lamina` commands.
 metadata:
   author: lamina-team
-  version: "0.5.4"
+  version: "0.5.7"
 ---
 
 # Lamina CLI: brand-aware AI media generation
@@ -31,9 +31,10 @@ automatically. This skill teaches you the canonical flow and the rules.
    even in a TTY. Errors emit JSON on stderr in JSON mode too — one
    parser for success and failure.
 
-2. **Apps are the curated path. Always start with `lamina apps list --search
-   "<keyword>" --json`.** Apps are workflows that a human author has tuned
-   end to end. Use them before considering anything else.
+2. **Apps are the curated path. Always start with `lamina apps list <kw1>
+   <kw2> ... --json`** (positional keywords; multiple in one call —
+   the server scores + ranks the union). Apps are workflows a human author
+   has tuned end to end. Use them before considering anything else.
 
 3. **Inspect the parameter contract before running.** `lamina apps get
    <appId> --json` returns the full input spec — names, types, defaults,
@@ -94,7 +95,7 @@ automatically. This skill teaches you the canonical flow and the rules.
 | `lamina login` | Authenticate (browser OAuth) or `--api-key <key>` for CI |
 | `lamina logout` | Clear stored credentials |
 | `lamina whoami` | Identity + active workspace |
-| `lamina apps list [--search <q>]` | Discover apps |
+| `lamina apps list [<keyword> ...] [--limit n]` | Discover apps. With keywords: smart scored search (same matcher MCP `lamina_discover` uses). Without keywords: browse mode (top apps by popularity). |
 | `lamina apps get <appId>` | Parameter contract for one app |
 | `lamina assets upload <path>` | Upload local file → CDN URL |
 | `lamina run <appId> --input k=v --wait` | Execute an app (add `--download <template>` to also save outputs to disk) |
@@ -103,6 +104,10 @@ automatically. This skill teaches you the canonical flow and the rules.
 | `lamina runs cancel <runId>` | Cancel a queued/running execution (idempotent) |
 | `lamina content create "<brief>"` | Brief → run a workflow. Router picks an app (or recipe), drafts inputs, **auto-dispatches when sufficient**; otherwise returns `needs_input` / `needs_clarification`. |
 | `lamina content plan "<brief>"` | Preview-only sibling of `create`. Same routing tree but NEVER dispatches. Use for dry-runs, debug, CI preview. |
+| `lamina models list [<kw1> <kw2> ...] [--modality image\|video]` | List atomic models. Positional keywords are passed to the smart scorer (same matcher MCP `lamina_discover` uses). |
+| `lamina models describe <id> [--modality image\|video]` | Show one model's input contract — flat `paramSchema` where `prompt` is just another field (when supported). Models that don't accept a prompt simply omit it. Hybrid models present a merged schema with mode-specific fields marked optional. |
+| `lamina generate image --model <id> [--prompt "..."] [--params '<json>']` | **Atomic image dispatch** — ONE command for every image operation. The model id is the discriminator. Text-to-image, image-to-image, edit, remix, background-remove, reframe — all share this verb. Hybrid models (nano-banana-pro, gpt-image-2, gemini-2.5-flash-image, seedream-4.5, flux-2-flex, nano-banana-2, gpt-image-1, gpt-image-1.5) flip to image-to-image when `params.imageUrls` (non-empty) or `params.imageUrl` is set; otherwise text-to-image. Edit-only models (bria-bg-remove, ideogram-character, ideogram-v3-remix/reframe/replace-background, flux-pro-kontext, ideogram-character-remix) always require a source. |
+| `lamina generate video --model <id> [--prompt "..."] [--params '<json>']` | **Atomic video dispatch** — ONE command for every video operation. Text-to-video, image-to-video, video-to-video, motion-control, reference-to-video, keyframe — all share this verb. Each video model has a single declared mode; pick the model that does what you want and provide its required URL params (`imageUrl` for image-to-video, `videoUrl` for video-to-video, both for motion-control, `firstFrameUrl`+`lastFrameUrl` for keyframe, `referenceImageUrls` for reference variants). |
 | `lamina run <appId> ...` | Execute a catalog app (deterministic, no LLM). Add `--output "<label>"` (repeatable) to run only a subset of the app's outputs. |
 | `lamina run --recipe-file <path> ...` | Execute a freestyle recipe from `~/.lamina/recipes/...` |
 | `lamina webhook status` / `lamina webhook clear` | Inspect / clear the saved default webhook URL |
@@ -187,20 +192,239 @@ decision before committing — CI dry-runs, debugging which app the router
 picks, manual review before burning credits. For the regular agentic flow,
 use `create`.
 
+## Atomic image generation + edit
+
+Two atomic dispatch verbs cover every model-pinned operation. The model id
+is the discriminator — there's no separate verb for edit / image-to-video /
+motion-control / etc., because those are just different models that take
+different params (per their `paramSchema`).
+
+- **`lamina generate image`** — every image dispatch. Text-to-image when
+  you pass just a prompt; image-to-image when `params` includes a source
+  image (`imageUrls` non-empty array, or `imageUrl` for single-source
+  models like `flux-pro-kontext`). Hybrid models flip automatically;
+  edit-only models always require a source.
+- **`lamina generate video`** — every video dispatch (text-to-video,
+  image-to-video, video-to-video, motion-control, reference-to-video,
+  keyframe). Each video model has one declared mode; the model id picks
+  the operation, and required URL fields in `params` come from the
+  model's paramSchema.
+
+The discovery flow is the same for both:
+
+1. **`lamina models list <kw1> <kw2> ...`** — positional keywords go
+   through the smart scorer (same matcher MCP `lamina_discover` uses).
+   Without keywords, you get top apps by popularity, capped by `--limit`.
+   Combine medium + form + context for best results, e.g.
+   `lamina models list product video reel 9:16 --modality video`.
+
+2. **`lamina models describe <id>`** — input contract for the chosen
+   model. Response is FLAT: `paramSchema` keyed by field name. `prompt`
+   appears here as a regular `type: 'string'` field (when supported)
+   alongside other inputs. Hybrid models merge their modes' fields into
+   one schema with mode-specific fields marked optional. Each field has
+   `type`, range, default, enum `values`, description.
+
+3. **`lamina generate {image|video} --model <id> [--prompt "..."]
+   [--params '<json>']`** — dispatch. The CLI returns a `runId`; pass
+   `--wait` to block + `--download <template>` to save outputs, or fire
+   and forget with `--webhook <url>`.
+
+### Synchronous vs asynchronous models
+
+Most models go through fal and take 5–60s (image) or 30s–5min (video).
+A subset is Vertex-AI-backed and returns inline — `--wait` returns on
+the first poll:
+
+- Vertex (sync, ~2s): `imagen-4.0-fast-generate-001`, `imagen-4.0-generate-001`,
+  `imagen-4.0-ultra-generate-001`, `gemini-2.5-flash-image`,
+  `veo3-text-to-video`, `veo3-image-to-video`, `veo3-first-frame-to-video`,
+  `veo3-keyframe-to-video`.
+- fal (async): everything else.
+
+The agent doesn't need to branch — the contract is identical.
+
+### Hybrid models (multiple modes)
+
+`nano-banana-pro`, `nano-banana-2`, `gpt-image-1`, `gpt-image-1.5`,
+`gpt-image-2`, `seedream-4.5`, `flux-2-flex`, `gemini-2.5-flash-image`
+declare both `text-to-image` and `image-to-image`. The server flips
+automatically based on whether `params.imageUrls` (non-empty) or
+`params.imageUrl` is supplied. No separate command — same `lamina
+generate image`.
+
+### Examples
+
+```bash
+# Text-to-image (basic)
+lamina generate image --model ideogram-v3 \
+  --prompt "vintage poster, text reads \"NEW DROP\""
+
+# Text-to-image with custom dimensions
+lamina generate image --model gpt-image-2 \
+  --prompt "moody product shot on slate" \
+  --params '{"imageSize":"custom","customWidth":1920,"customHeight":1088}'
+
+# Text-to-image — Vertex sync, returns in seconds
+lamina generate image --model imagen-4.0-fast-generate-001 \
+  --prompt "a single ceramic teacup, soft morning light" \
+  --params '{"aspectRatio":"16:9"}' \
+  --wait --download ./out/
+
+# Image-to-image — hybrid model, same verb, source in params
+lamina generate image --model nano-banana-pro \
+  --prompt "watercolor style with brand palette" \
+  --params '{"imageUrls":["https://media.../source.png"]}' \
+  --wait --download ./out/
+
+# Image-to-image — background remove (edit-only, no prompt)
+lamina generate image --model bria-bg-remove \
+  --params '{"imageUrls":["https://example.com/product.png"]}' \
+  --wait --download ./out/
+
+# Image-to-image — inpainting with mask
+lamina generate image --model gpt-image-2 \
+  --prompt "fill the masked area with matching texture" \
+  --params '{"imageUrls":["https://..."],"maskUrl":"https://..."}'
+
+# Image-to-image — background swap
+lamina generate image --model ideogram-v3-replace-background \
+  --prompt "a sunlit Tokyo café in the background" \
+  --params '{"imageUrls":["https://..."]}'
+
+# Image-to-image — Flux Pro Kontext (single-image edit)
+lamina generate image --model flux-pro-kontext \
+  --prompt "place the product on a marble pedestal in soft studio light" \
+  --params '{"imageUrl":"https://.../product.png","aspectRatio":"3:2"}' \
+  --wait --download ./out/
+
+# Text-to-video — Kling v2.5 with overrides (fal async, 30s–5min)
+lamina generate video --model kling-v25-text-to-video \
+  --prompt "macro shot of dew rolling down a leaf, golden hour" \
+  --params '{"duration":"10","aspectRatio":"9:16","cfgScale":0.7}' \
+  --wait --timeout-ms 600000 --download ./out/
+
+# Image-to-video — Minimax (single imageUrl)
+lamina generate video --model minimax-image-to-video \
+  --prompt "the subject smiles and slowly turns toward the camera" \
+  --params '{"imageUrl":"https://example.com/portrait.jpg"}'
+
+# Image-to-video — Seedance keyframe (start + end frames)
+lamina generate video --model seedance-2.0-fast-image-to-video \
+  --prompt "subject walks toward the doorway" \
+  --params '{"startImageUrl":"https://.../start.jpg","endImageUrl":"https://.../end.jpg","duration":"8"}'
+
+# Image-to-video — Veo3 first-frame (Vertex sync, ~5s)
+lamina generate video --model veo3-first-frame-to-video \
+  --prompt "wind ripples through the grass; subject's hair lifts gently" \
+  --params '{"firstFrameUrl":"https://example.com/portrait.jpg","duration":6,"resolution":"720p"}' \
+  --wait --download ./out/
+
+# Keyframe — Veo3 (interpolate first → last)
+lamina generate video --model veo3-keyframe-to-video \
+  --prompt "the subject walks from the window to the door" \
+  --params '{"firstFrameUrl":"https://.../window.jpg","lastFrameUrl":"https://.../door.jpg","duration":8}' \
+  --wait --download ./out/
+
+# Motion-control — character image + motion-reference video
+lamina generate video --model kling-v26-motion-control \
+  --params '{"imageUrl":"https://.../character.png","videoUrl":"https://.../dance.mp4"}' \
+  --wait --timeout-ms 300000 --download ./out/
+
+# Video-to-video edit
+lamina generate video --model wan-video-to-video \
+  --prompt "cinematic teal-and-orange grade, slow-motion feel" \
+  --params '{"videoUrl":"https://.../source.mp4"}' \
+  --wait --timeout-ms 300000 --download ./out/
+
+# Image-to-video — Kling V3 Pro multi-shot (narrative video, max 5 shots,
+# total duration ≤ 15s)
+lamina generate video --model kling-v3-pro-image-to-video \
+  --prompt "brand product launch sizzle" \
+  --params '{
+    "startImageUrl":"https://.../hero.jpg",
+    "multiShots":true,
+    "multiPrompt":[
+      {"prompt":"camera dollies in on the product","duration":"5"},
+      {"prompt":"camera arcs around to reveal the logo","duration":"5"},
+      {"prompt":"camera pulls back, brand text appears","duration":"5"}
+    ]
+  }'
+```
+
+### Multi-shot mode (Kling V3/O3 image-to-video)
+
+Four models support narrative multi-shot generation: `kling-o3-standard-image-to-video`, `kling-o3-pro-image-to-video`, `kling-v3-standard-image-to-video`, `kling-v3-pro-image-to-video`. Toggle with `params.multiShots: true`, then provide `params.multiPrompt: [{prompt, duration}, ...]`. Rules enforced by the registry:
+- 1–5 shots per run
+- Each shot's `duration` must be in `'3'..'15'` (string)
+- Sum of all shot durations must be in `[3, 15]` (total clip cap)
+- When `multiShots: true`, the top-level `prompt` is required (kept as a brief description) but NOT sent to fal — only `multi_prompt` reaches the model
+
+Validation errors are structured so an agent can self-correct: `{ field, error, allowed/range/maxShots, got }`.
+
+### When to use atomic generate/edit vs `lamina content create`
+
+| You want | Use |
+|---|---|
+| Router to pick an app from a free-text brief, orchestrate inputs, multi-step workflows | `lamina content create` (agentic) |
+| Pick a specific model, dispatch one image directly (no LLM in path) | `lamina generate image --model <id>` (text-to-image OR image-to-image — model id discriminates) |
+| Compose primitive steps in your own skill / IDE flow | atomic surface |
+| Experiment with or compare models | atomic surface |
+| Dispatch a known workflow with the exact `appId` | `lamina run <appId>` |
+
+The atomic surface is its own thin dispatch layer on top of fal: caller
+picks the model + mode (via tool choice), server validates against the
+model's mode-specific paramSchema, submits to fal directly, and stores
+the run in `fal_requests`. Same `lamina runs wait` works for both atomic
+generate and edit runIds.
+
 ## Direct app discovery (the non-plan path)
 
 When the user's intent is concrete enough that you (the agent) can pick
 an app yourself, skip `plan` and search directly. Three steps:
 
-1. **Search with the brief's intent keywords**, not the user's literal
-   words. If the brief says "make a selfie with a celebrity", search
-   for `selfie`, then if needed `celebrity portrait`, then if needed
-   `portrait identity`. Run 1-2 searches max — `apps list` returns
-   many results per query.
+1. **Search smartly with a comprehensive keyword list — one call, multiple
+   angles.** `lamina apps list <kw1> <kw2> <kw3> ... --json` takes positional
+   keywords and routes through the **same scored matcher the MCP
+   `lamina_discover` tool uses** (SQL prefilter + JS scorer with intent
+   analysis + popularity ranking). Don't make many narrow one-keyword
+   calls — pass everything that captures the user's intent in a single
+   invocation. The server does the union + scoring.
+
+   How to pick the keywords from the brief:
+
+   - **Medium** (`image`, `video`, `audio`)
+   - **Form / output kind** (`reel`, `hero`, `banner`, `headshot`,
+     `portrait`, `pack shot`, `try-on`, `lookbook`, `catalog`)
+   - **Context / channel** (`ecommerce`, `social`, `lifestyle`,
+     `editorial`, `Instagram`, `story`, `ad`)
+   - **Subject domain** if the brief named one (`apparel`, `eyewear`,
+     `jewelry`, `food`, `cosmetics`)
+   - **Aspect / format** when explicit (`9:16`, `16:9`, `square`)
+
+   Combine 3–6 angles from the brief in one call — that's the contract
+   shape that produces tight, ranked candidates:
 
    ```
-   lamina apps list --search selfie --json
+   # "make me a selfie with a celebrity"
+   lamina apps list selfie celebrity portrait identity --json
+
+   # "product video reel for our new sneaker"
+   lamina apps list "product video" reel 9:16 ecommerce --json
+
+   # "editorial hero shot for the founder"
+   lamina apps list "hero shot" editorial lifestyle portrait --json
    ```
+
+   Quote multi-word keywords (`"hero shot"`) so the shell passes them
+   as a single positional. `apps list` with no keywords is **browse
+   mode** — returns top apps by popularity, capped by `--limit`.
+
+   If the first call's candidates don't fit the brief's actual subject,
+   rephrase with different angles and call again. **Only fall back to
+   `lamina content plan` (the recipe path) after you're confident no
+   app in the workspace covers the brief.** Apps are human-tuned;
+   they're nearly always the better path than a recipe.
 
 2. **Read each candidate's `description` / `purpose` as a whole
    sentence.** Don't keyword-match. Ask: what does this app *actually
