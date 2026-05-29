@@ -1,7 +1,3 @@
-import { randomBytes } from 'node:crypto';
-import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { createClientFromAuthContext, resolveStoredWebhookUrl } from '../lib/config.js';
@@ -23,11 +19,11 @@ High-level natural-language entry points. For low-level (specific app +
 explicit inputs) use \`lamina run\`.
 
 Subcommands:
-  create <brief>     Brief → run a workflow. The router picks an app (or
-                     falls back to a freestyle recipe), drafts inputs, and
-                     dispatches automatically when the brief has enough
-                     context. Otherwise returns the missing inputs for the
-                     caller to provide via \`lamina run\`.
+  create <brief>     Brief → run an app. The router picks an app, drafts
+                     inputs, and dispatches automatically when the brief has
+                     enough context. Returns asks / clarifications when it
+                     doesn't, or \`unmatched\` when no app fits (caller can
+                     then fall back to \`lamina generate\`).
   plan <brief>       Preview only — same routing as \`create\` but never
                      dispatches. Use when you want to inspect the plan
                      before committing.
@@ -40,23 +36,18 @@ Run \`lamina content <subcommand> --help\` for subcommand options.
 
 const CREATE_HELP = `Usage: lamina content create "<brief>" [options]
 
-Send a brief to the content router agent and run a workflow. Same routing
-as \`lamina content plan\` (catalog app OR freestyle recipe fallback,
-drafted inputs, asks, clarifications) PLUS auto-dispatch when the brief
-has enough context to commit safely.
+Send a brief to the content router agent and run an app. Same routing
+as \`lamina content plan\` (app discovery, drafted inputs, asks,
+clarifications) PLUS auto-dispatch when the brief has enough context to
+commit safely.
 
 Returns one of four shapes keyed on \`data.status\`:
 
-  • status: "ran" + mode: "app"
+  • status: "ran"
       response.data includes: runId, selectedApp, draftedInputs, warnings
       Next: \`lamina runs wait <runId>\` (or pass --wait to block here).
 
-  • status: "ran" + mode: "recipe"
-      response.data includes: runId, recipe, modality, picks, numVariants,
-      submittedCount, failedCount, warnings
-      Next: \`lamina runs wait <runId>\` (or pass --wait).
-
-  • status: "needs_input" + mode: "app"
+  • status: "needs_input"
       response.data includes: selectedApp, draftedInputs, askUser[],
       warnings, selectedOutputs? (when brief subsets outputs)
       Next: ask the human each askUser question, then dispatch with
@@ -64,11 +55,6 @@ Returns one of four shapes keyed on \`data.status\`:
           --input <each asked-name>=<answer> \\
           --output "<each selectedOutputs label>"   (if present)
           --wait --json
-
-  • status: "needs_input" + mode: "recipe"
-      response.data includes: recipe, recipeFile, modality, askUser[], warnings
-      Next: ask the human, then dispatch with
-        lamina run --recipe-file <recipeFile> --input <answers> --wait --json
 
   • status: "needs_clarification"
       response.data includes: clarifications[]
@@ -95,7 +81,6 @@ Options:
   --modality <kind>          Modality hint: image | video.
   --app-id <uuid>            Skip ranking and pin to this app directly.
   --brand-profile-id <uuid>  Apply a specific brand profile.
-  --num-variants <n>         Variant count when the agent goes freestyle.
   --webhook <url|default>    Per-call webhook URL; "default" reuses the
                              saved listener URL. Omit to use the saved
                              default (if any).
@@ -120,15 +105,15 @@ Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials.
 const PLAN_HELP = `Usage: lamina content plan "<brief>" [options]
 
 Preview-only counterpart of \`lamina content create\`. Same router agent,
-same routing tree (apps + recipes), same drafted inputs + asks — but this
-command NEVER dispatches a run. Use \`lamina content create\` for the
+same routing (app discovery, drafted inputs, asks) — but this command
+NEVER dispatches a run. Use \`lamina content create\` for the
 auto-dispatching workflow; use \`plan\` only when you explicitly want a
 preview (CI dry-runs, debugging routing decisions, manual review before
 committing credits).
 
-Returns one of four shapes keyed on \`data.status\`:
+Returns one of three shapes keyed on \`data.status\`:
 
-  • status: "plan" + mode: "app"
+  • status: "plan"
       response.data includes:
         selectedApp.appId, selectedApp.rationale, draftedInputs,
         askUser[], selectedOutputs? (only when brief subsets outputs),
@@ -139,11 +124,6 @@ Returns one of four shapes keyed on \`data.status\`:
           --input <each askUser name>=<answer> \\
           --output "<each selectedOutputs label>"   (if present)
           --wait --json
-
-  • status: "plan" + mode: "recipe"
-      response.data includes: recipe, recipeFile, askUser[], warnings[]
-      Next: ask the human, then dispatch with
-        lamina run --recipe-file <recipeFile> --input <answers> --wait --json
 
   • status: "needs_clarification"
       response.data includes: clarifications[]
@@ -169,7 +149,6 @@ Options:
   --modality <kind>          Modality hint: image | video.
   --app-id <uuid>            Skip ranking and pin to this app directly.
   --brand-profile-id <uuid>  Apply a specific brand profile.
-  --num-variants <n>         Variant count when the agent goes freestyle.
   --json                     Emit the raw API envelope.
   --help, -h                 Show this help.
 
@@ -333,25 +312,6 @@ async function handleCreate(args: string[]): Promise<void> {
     ...(webhookUrl ? { webhookUrl } : {}),
   } as Parameters<typeof client.content.create>[0]);
 
-  // For `mode: 'recipe'` `needs_input` responses, write the recipe JSON to a
-  // local file so the calling agent can dispatch via `lamina run --recipe-file`.
-  // Same convention as `lamina content plan`.
-  let recipeFile: string | undefined;
-  if (
-    response.data.status === 'needs_input' &&
-    response.data.mode === 'recipe' &&
-    response.data.recipe
-  ) {
-    try {
-      recipeFile = await writeRecipeFile(response.data.recipe);
-      void cleanupOldRecipes();
-    } catch (err) {
-      process.stderr.write(
-        `Warning: failed to write recipe to ~/.lamina/recipes/: ${(err as Error).message}\n`,
-      );
-    }
-  }
-
   // If --wait and dispatched: block until terminal and print outputs.
   const shouldWait = parsed.values.wait && response.data.status === 'ran';
   if (shouldWait && response.data.status === 'ran') {
@@ -371,14 +331,11 @@ async function handleCreate(args: string[]): Promise<void> {
   }
 
   if (parsed.values.json || isJsonMode()) {
-    const augmented = recipeFile
-      ? { ...response, data: { ...response.data, recipeFile } }
-      : response;
-    printJson(augmented);
+    printJson(response);
     return;
   }
 
-  printContentCreateResult(response.data, { recipeFile });
+  printContentCreateResult(response.data);
 }
 
 async function handlePlan(args: string[]): Promise<void> {
@@ -446,82 +403,12 @@ async function handlePlan(args: string[]): Promise<void> {
     numVariants,
   });
 
-  // For `mode: 'recipe'` responses, write the recipe JSON to a local file so
-  // the calling agent can dispatch it via `lamina run --recipe-file <path>`.
-  // Best-effort: log a warning if write fails but don't error — the recipe is
-  // also returned inline in the JSON response.
-  let recipeFile: string | undefined;
-  if (
-    response.data.status === 'plan' &&
-    response.data.mode === 'recipe' &&
-    response.data.recipe
-  ) {
-    try {
-      recipeFile = await writeRecipeFile(response.data.recipe);
-      // Best-effort cleanup of old recipe files (>24h).
-      void cleanupOldRecipes();
-    } catch (err) {
-      process.stderr.write(
-        `Warning: failed to write recipe to ~/.lamina/recipes/: ${(err as Error).message}\n`,
-      );
-    }
-  }
-
   if (parsed.values.json || isJsonMode()) {
-    // Include the recipeFile path in the JSON output if we wrote one.
-    const augmented = recipeFile
-      ? { ...response, data: { ...response.data, recipeFile } }
-      : response;
-    printJson(augmented);
+    printJson(response);
     return;
   }
 
-  printContentPlan(response.data, { recipeFile });
-}
-
-// ─── Recipe file storage helpers ───────────────────────────────────────────
-//
-// When `lamina content plan` returns a recipe (no catalog app fit), we write
-// the recipe JSON to `~/.lamina/recipes/recipe-<date>-<id>.json` so the
-// calling agent can pass it to `lamina run --recipe-file <path>` for
-// deterministic dispatch via the existing `client.content.run({mode:
-// 'freestyle', ...})` SDK call. Files auto-clean after 24h.
-
-const RECIPES_DIR = join(homedir(), '.lamina', 'recipes');
-const RECIPE_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
-
-async function writeRecipeFile(recipe: unknown): Promise<string> {
-  await mkdir(RECIPES_DIR, { recursive: true });
-  const today = new Date().toISOString().slice(0, 10);
-  const id = randomBytes(4).toString('hex');
-  const path = join(RECIPES_DIR, `recipe-${today}-${id}.json`);
-  await writeFile(path, JSON.stringify(recipe, null, 2), 'utf8');
-  return path;
-}
-
-async function cleanupOldRecipes(): Promise<void> {
-  let entries;
-  try {
-    entries = await readdir(RECIPES_DIR);
-  } catch {
-    return; // directory doesn't exist yet
-  }
-  const now = Date.now();
-  await Promise.all(
-    entries
-      .filter((name) => name.startsWith('recipe-') && name.endsWith('.json'))
-      .map(async (name) => {
-        const full = join(RECIPES_DIR, name);
-        try {
-          const s = await stat(full);
-          if (now - s.mtimeMs > RECIPE_FILE_MAX_AGE_MS) {
-            await unlink(full);
-          }
-        } catch {
-          // best-effort
-        }
-      }),
-  );
+  printContentPlan(response.data);
 }
 
 async function handleBrief(args: string[]): Promise<void> {

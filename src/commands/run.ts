@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 
 import { createClientFromAuthContext, resolveWebhookForDispatch } from '../lib/config.js';
@@ -13,24 +12,15 @@ import { printExecution, printJson, printRunStarted } from '../lib/output.js';
 import { isJsonMode } from '../lib/outputMode.js';
 
 const HELP = `Usage:
-  lamina run <appId>            [options]   # dispatch a catalog app
-  lamina run --recipe-file <p>  [options]   # dispatch a recipe (from \`lamina content plan\`)
+  lamina run <appId> [options]              # dispatch a catalog app
 
-Dispatch a catalog app OR a freestyle recipe (mutually exclusive).
+Dispatch a Lamina catalog App.
 
-App mode — positional <appId>:
+Inputs:
   --input <key=value>      Set one input. Repeatable. Use the snake_case
                            \`key\` from \`lamina apps get <appId>\`.
   --file <path.json>       Load inputs from a JSON file. Either
                            { "key": "value", ... } or { "inputs": { ... } }.
-
-Recipe mode — --recipe-file <path>:
-  --recipe-file <path>     Dispatch the recipe at <path>. Typically the file
-                           written by \`lamina content plan\` when the agent
-                           falls back to a recipe (no catalog app fits).
-  --input <key=value>      Optional per-recipe overrides — used when the
-                           plan response included askUser items and the
-                           human's answers slot into the recipe.
 
 Wait & poll:
   --wait                   Block until the run reaches a terminal state.
@@ -87,15 +77,13 @@ Output:
   --help, -h               Show this help.
 
 Examples:
-  lamina run e0124407-d57a-4f76-ac5a-be0041e55a24
-  lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 --input celebrity_text="Brad Pitt"
-  lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 --file inputs.json --wait
+  lamina run b149d8c8-dff7-4a92-b828-b84b0e18b50d
+  lamina run b149d8c8-... --input product_image_url=https://media.../mug.jpg
+  lamina run b149d8c8-... --file inputs.json --wait
   lamina run 19fdcc86-... --input front_image_url=https://... \\
     --output "Front View" --output "Lifestyle View" --wait
-  lamina run --recipe-file ~/.lamina/recipes/recipe-2026-05-12-abc.json --wait
 
-Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials. Override the
-endpoint with LAMINA_BASE_URL (defaults to https://app.uselamina.ai).
+Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials.
 `;
 
 export async function handleRunCommand(args: string[]): Promise<void> {
@@ -105,10 +93,8 @@ export async function handleRunCommand(args: string[]): Promise<void> {
       throw new LaminaCliError({
         code: 'invalid_argument',
         exitCode: EXIT.INVALID_USAGE,
-        message: 'Missing <appId> or --recipe-file <path>.',
-        suggestion:
-          'For app dispatch, pass <appId> (see `lamina apps list`).\n' +
-          'For recipe dispatch, pass --recipe-file <path> (typically from `lamina content plan`).',
+        message: 'Missing <appId>.',
+        suggestion: 'Pass <appId> (see `lamina apps list`).',
       });
     }
     return;
@@ -119,7 +105,6 @@ export async function handleRunCommand(args: string[]): Promise<void> {
     parsed = parseArgs({
       args,
       options: {
-        'recipe-file': { type: 'string' },
         file: { type: 'string' },
         input: { type: 'string', multiple: true },
         wait: { type: 'boolean' },
@@ -145,23 +130,13 @@ export async function handleRunCommand(args: string[]): Promise<void> {
   }
 
   const positionalAppId = parsed.positionals[0];
-  const recipeFile = parsed.values['recipe-file'];
 
-  // Mode discrimination
-  if (positionalAppId && recipeFile) {
+  if (!positionalAppId) {
     throw new LaminaCliError({
       code: 'invalid_argument',
       exitCode: EXIT.INVALID_USAGE,
-      message: 'Pass either <appId> positional OR --recipe-file, not both.',
-      suggestion: 'App dispatch: lamina run <appId>. Recipe dispatch: lamina run --recipe-file <path>.',
-    });
-  }
-  if (!positionalAppId && !recipeFile) {
-    throw new LaminaCliError({
-      code: 'invalid_argument',
-      exitCode: EXIT.INVALID_USAGE,
-      message: 'Missing <appId> or --recipe-file <path>.',
-      suggestion: 'Run `lamina run --help` for usage.',
+      message: 'Missing <appId>.',
+      suggestion: 'Pass an appId (see `lamina apps list`). Run `lamina run --help` for usage.',
     });
   }
 
@@ -195,13 +170,8 @@ export async function handleRunCommand(args: string[]): Promise<void> {
     return;
   }
 
-  if (recipeFile) {
-    await dispatchRecipe(recipeFile, parsed);
-    return;
-  }
-
-  // App dispatch (existing behavior)
-  await dispatchApp(positionalAppId!, parsed);
+  // App dispatch
+  await dispatchApp(positionalAppId, parsed);
 }
 
 // ─── App dispatch ──────────────────────────────────────────────────────────
@@ -277,119 +247,9 @@ async function dispatchApp(
   }
 }
 
-// ─── Recipe dispatch ───────────────────────────────────────────────────────
-//
-// Reads a recipe JSON file (written by `lamina content plan` when the agent
-// falls back to a recipe), merges any --input overrides into each variant's
-// params (for askUser answers), and dispatches via the existing
-// `client.content.run({ mode: 'freestyle', ... })` SDK call. Polls via
-// `client.freestyle.wait` if --wait.
-
-async function dispatchRecipe(
-  recipeFile: string,
-  parsed: ReturnType<typeof parseArgs>,
-): Promise<void> {
-  // Read + parse the recipe JSON.
-  let recipe: { modality?: string; variants?: Array<Record<string, unknown>>; reason?: string };
-  try {
-    const raw = await readFile(recipeFile, 'utf8');
-    recipe = JSON.parse(raw);
-  } catch (err) {
-    throw new LaminaCliError({
-      code: 'invalid_argument',
-      exitCode: EXIT.INVALID_USAGE,
-      message: `Failed to read recipe file '${recipeFile}': ${(err as Error).message}`,
-      suggestion: 'Verify the file exists. Recipe files are typically at ~/.lamina/recipes/.',
-    });
-  }
-
-  if (!recipe || typeof recipe !== 'object' || !Array.isArray(recipe.variants)) {
-    throw new LaminaCliError({
-      code: 'invalid_argument',
-      exitCode: EXIT.INVALID_USAGE,
-      message: `Recipe file '${recipeFile}' is not a valid recipe (missing variants[]).`,
-      suggestion: 'Re-run `lamina content plan` to regenerate a recipe.',
-    });
-  }
-  const modality: 'image' | 'video' = recipe.modality === 'video' ? 'video' : 'image';
-
-  // Merge --input answers into every variant's params. For images, target
-  // imageParams; for video, imageParams (stage-1 still) AND videoParams.
-  //
-  // Array-typed slots: when a variant's params declare a key as an empty
-  // array (e.g. `imageParams.imageUrls = []` — the agent's placeholder for
-  // "to be filled from ask_user_for"), a scalar `--input` value is wrapped
-  // into a single-element array so the server validator accepts it. If
-  // the user supplied multiple values for the same key (repeated --input),
-  // parseInlineInputs already produced an array — pass it through.
-  const inlineInputs = parseInlineInputs((parsed.values.input as string[]) || []);
-  const variants = recipe.variants.map((v) =>
-    mergeInputsIntoVariant(v, inlineInputs, modality),
-  );
-
-  const webhookResolution = await resolveWebhookForDispatch({
-    explicit: parsed.values.webhook as string | undefined,
-    optOut: parsed.values['no-webhook'] as boolean | undefined,
-  });
-  const webhookUrl = webhookResolution.webhookUrl || undefined;
-
-  // Surface the resolved webhook source in non-JSON output.
-  if (webhookUrl && !(parsed.values.json || isJsonMode())) {
-    const label = webhookResolution.source === 'stored' ? ' (default)' : '';
-    process.stdout.write(`Webhook${label}: ${webhookUrl}\n`);
-  }
-
-  const { client } = await createClientFromAuthContext();
-
-  const started = await client.content.run({
-    mode: 'freestyle',
-    freestyleRecipe: {
-      modality,
-      rationale: recipe.reason,
-      variants,
-    },
-    intent: undefined,
-    metadata: { source: 'lamina_cli_run_recipe' },
-    numVariants: variants.length,
-    webhookUrl,
-  });
-
-  if (!parsed.values.wait) {
-    if (parsed.values.json || isJsonMode()) {
-      printJson(started);
-    } else {
-      process.stdout.write(`Recipe run started: ${started.data.runId}\n`);
-      process.stdout.write(`Mode:               freestyle (${modality})\n`);
-      if (started.data.picks) process.stdout.write(`Picks:              ${started.data.picks}\n`);
-      process.stdout.write(`\nFollow with: lamina runs wait ${started.data.runId}\n`);
-    }
-    return;
-  }
-
-  const completed = await client.freestyle.wait(started.data.runId, {
-    intervalMs: parsed.values['interval-ms']
-      ? Number.parseInt(parsed.values['interval-ms'] as string, 10)
-      : 2000,
-    timeoutMs: parsed.values['timeout-ms']
-      ? Number.parseInt(parsed.values['timeout-ms'] as string, 10)
-      : 240000,
-  });
-
-  const downloads = await maybeDownloadAndAnnotate({
-    parsed,
-    runId: started.data.runId,
-    response: completed,
-  });
-
-  if (parsed.values.json || isJsonMode()) {
-    printJson(completed);
-  } else {
-    // Freestyle completed runs use a slightly different shape than apps; for
-    // now surface the JSON inline. Pretty rendering comes in a later pass.
-    printJson(completed);
-    if (downloads) printDownloads(downloads);
-  }
-}
+// When `lamina content plan` can't match a brief to a catalog App, the
+// response carries `unmatched` status — the calling agent falls back to
+// direct model dispatch via `lamina generate image|video`.
 
 /**
  * If `--download <template>` was supplied, download every terminal-completed
@@ -427,48 +287,6 @@ function printDownloads(downloads: DownloadedFile[]): void {
     const kb = (d.bytes / 1024).toFixed(1);
     process.stdout.write(`  outputs[${d.outputIndex}] → ${d.localPath} (${kb} KB)\n`);
   }
-}
-
-/**
- * Merge user-supplied --input values into a recipe variant.
- *
- * For each input key:
- *   - If the variant declares the key as an array (e.g. `imageUrls: []` —
- *     the agent's placeholder for a pending ask), wrap a scalar string into
- *     a single-element array. Arrays from parseInlineInputs pass through.
- *   - Otherwise the value merges directly (scalar overrides scalar).
- *
- * Video variants also receive the merged inputs into videoParams so stage-2
- * params (e.g. duration, motion overrides) can be supplied at dispatch.
- */
-function mergeInputsIntoVariant(
-  variant: Record<string, unknown>,
-  inputs: Record<string, unknown>,
-  modality: 'image' | 'video',
-): Record<string, unknown> {
-  if (Object.keys(inputs).length === 0) return variant;
-
-  const merged = (
-    target: Record<string, unknown> | undefined,
-  ): Record<string, unknown> => {
-    const base = target && typeof target === 'object' ? { ...target } : {};
-    for (const [k, v] of Object.entries(inputs)) {
-      const existing = base[k];
-      if (Array.isArray(existing) && !Array.isArray(v)) {
-        base[k] = [v];
-      } else {
-        base[k] = v;
-      }
-    }
-    return base;
-  };
-
-  const next: Record<string, unknown> = { ...variant };
-  next.imageParams = merged(next.imageParams as Record<string, unknown> | undefined);
-  if (modality === 'video') {
-    next.videoParams = merged(next.videoParams as Record<string, unknown> | undefined);
-  }
-  return next;
 }
 
 /**

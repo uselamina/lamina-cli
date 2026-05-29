@@ -51,8 +51,7 @@ Examples:
     --input your_photo_image_url="$URL" \\
     --input celebrity_text="Brad Pitt" --wait
 
-Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials. Override the
-endpoint with LAMINA_BASE_URL (defaults to https://app.uselamina.ai).
+Auth: reads LAMINA_API_KEY, then \`lamina login\` credentials.
 `;
 
 export async function handleAssetsCommand(args: string[]): Promise<void> {

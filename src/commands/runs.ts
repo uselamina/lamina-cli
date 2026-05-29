@@ -30,8 +30,7 @@ Options:
 const WAIT_HELP = `Usage: lamina runs wait <runId> [options]
 
 Block until the run reaches a terminal state (completed / failed / cancelled).
-Polymorphic — works for app runs, freestyle recipe runs, and atomic
-generate runs (\`lamina generate image\`).
+Polymorphic — works for app runs and direct model runs (\`lamina generate\`).
 
 To avoid hanging the chat session indefinitely, keep --timeout-ms bounded
 (≤180000ms) and re-call this command if the previous wait timed out without

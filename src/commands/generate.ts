@@ -13,8 +13,8 @@ import { isJsonMode } from '../lib/outputMode.js';
 
 const GROUP_HELP = `Usage: lamina generate <subcommand>
 
-Atomic model-pinned dispatch. Two subcommands — \`image\` and \`video\` —
-cover every atomic operation. The model id is the discriminator:
+Direct model dispatch. Two subcommands — \`image\` and \`video\` — cover
+every generation operation. The model id is the discriminator:
 
   image    Every image dispatch:
              • text-to-image            (ideogram-v3, imagen-4.0-*, gemini-2.5-flash-image, …)
@@ -39,13 +39,14 @@ Run \`lamina generate <subcommand> --help\` for flags + worked examples.
 When to use this vs \`lamina content create\`:
   • \`lamina generate\`        — caller knows the model and supplies its params.
                                  One model, one output. No LLM in the dispatch path.
-  • \`lamina content create\`  — agentic router picks an app (or recipe) from a
-                                 free-text brief.
+  • \`lamina content create\`  — agentic router picks an app from a free-text
+                                 brief. Falls back to \`unmatched\` when no app
+                                 fits (caller can then use \`lamina generate\`).
 `;
 
 const IMAGE_HELP = `Usage: lamina generate image --model <id> [--prompt "<text>"] [options]
 
-Atomic image dispatch — every image operation in one command. Discover the
+Direct image-model dispatch — every image operation in one command. Discover the
 model with \`lamina models list --modality image\`, read its input contract
 with \`lamina models describe <id>\`, then dispatch with this command.
 
@@ -116,7 +117,7 @@ Examples:
 
 const VIDEO_HELP = `Usage: lamina generate video --model <id> [--prompt "<text>"] [options]
 
-Atomic video dispatch — every video operation in one command. Discover the
+Direct video-model dispatch — every video operation in one command. Discover the
 model with \`lamina models list --modality video\`, read its input contract
 with \`lamina models describe <id> --modality video\`, then dispatch.
 
@@ -413,7 +414,7 @@ async function handleGenerateImage(args: string[]): Promise<void> {
     return;
   }
 
-  // --wait: poll the dedicated atomic-generate status endpoint.
+  // --wait: poll the dedicated generate status endpoint.
   const terminal = await client.generate.wait(runId, { timeoutMs, intervalMs });
 
   // Adapt the single `output` shape to the array shape downloadOutputs +

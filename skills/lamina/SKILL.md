@@ -1,282 +1,274 @@
 ---
 name: lamina
-description: >
-  Use the Lamina CLI to discover apps, run brand-aware AI image / video /
-  content generation, and manage workspace assets. Trigger when the user
-  mentions "lamina", "lamina cli", "uselamina", or asks to "generate
-  image", "generate video", "make a selfie", "run a Lamina app", "list
-  apps", "find an app for", "upload an asset", "brand context", "content
-  plan", or any direct interaction with the uselamina.ai workspace
-  platform. This is the FOUNDATIONAL skill — every Lamina task goes
-  through `lamina` commands. Specialized skills (`lamina-models`,
-  `lamina-apps`, `lamina-content`, `lamina-intelligence`) cover specific
-  parts of the surface in depth.
+description: |
+  Lamina CLI for branded ecommerce media generation. Foundational skill
+  covering the whole CLI surface. Use when the user says: "use lamina",
+  "run a Lamina app", "generate a product shot", "make a banner",
+  "make a try-on", "make a reel", "make a UGC video", "make an Amazon
+  A+ listing", "multi-language adapt", "upload to Lamina", "list
+  apps", "find an app for X", "create from this brief", "plan from
+  this brief", "give me content ideas", "score our published content",
+  "what does Lamina know about my brand", "predict if this content
+  will work", "what should I post", "trending patterns", "generate
+  with model X", or any direct interaction with uselamina.ai. Three
+  surfaces — Apps (curated workflows), Models (direct image/video
+  generation), Content router (free-text shortcut) — all part of this
+  one foundational skill. See `references/` for deep catalog +
+  worked examples.
+argument-hint: "[brief-or-command] [--flags]"
+allowed-tools: Bash
 metadata:
   author: lamina-team
   version: "0.5.7"
 ---
 
-# Lamina CLI — foundational rules and command index
+# Lamina CLI — foundational skill
 
-`lamina` is the agent-first CLI for the Lamina workspace platform.
-Apps in the workspace are curated multi-step workflows authored by
-humans (the "selfie with celebrity" app, "virtual try-on", etc.).
-Brand intelligence is woven into every app run automatically. This
-skill teaches the rules every Lamina interaction follows; specialized
-skills cover each part of the surface in depth.
+`lamina` is the agent-first CLI for the Lamina workspace platform
+(uselamina.ai). Three surfaces, one skill:
 
-## When to use which skill
+- **Apps** — curated multi-step ecommerce workflows authored by humans
+  (product catalog, try-on, banners, reels, marketplace listings,
+  multi-language adapts). The canonical production path.
+- **Models** — direct image/video generation when you know the model.
+- **Content router** — free-text brief → server-side LLM picks an App
+  or returns unmatched when no App fits. A shortcut alternative to doing app
+  search yourself; useful for ideation and brand scoring.
 
-| User intent | Load this skill |
-|---|---|
-| Generic Lamina questions, foundational rules, command index | **this skill** (`lamina`) |
-| Atomic model-pinned image / video generation (caller picks the model) | `lamina-models` |
-| Direct app discovery + execution (caller knows app id or can pick one) | `lamina-apps` |
-| Vague creative brief → router picks an app or recipe | `lamina-content` |
-| Brand DNA inspection, performance prediction, trends, recommendations | `lamina-intelligence` |
+This skill covers all three at the depth needed for the agent to
+decide + dispatch. Deeper material (full app catalog, detailed worked
+examples, content router response structures, model dispatch nuances)
+lives in `references/` and is loaded on demand.
 
-The agent should load the specialized skill alongside this one when the
-user's intent is clear. This core skill stays loaded as the foundation.
+## Step 0 — Bootstrap
 
-## Critical rules — follow these every time
+Before any other command:
 
-1. **Output is JSON automatically when piped.** Since v0.5.1 the CLI
-   detects whether stdout is a TTY: if you're piping to `jq` or another
-   tool, you get JSON without typing `--json`. You CAN still pass
-   `--json` explicitly, and `LAMINA_OUTPUT=json` (env) forces JSON even
-   in a TTY. Errors emit JSON on stderr in JSON mode — one parser for
-   success and failure.
+1. **Skills install.** `lamina init` drops this skill (with `references/`) into `.claude/skills/lamina/`. Idempotent; re-run with `--force` after a CLI upgrade to refresh.
+2. **Auth.** If `lamina whoami` fails, run `lamina login` (browser OAuth) and wait for completion. CI: `lamina login --api-key <lma_…>` or `LAMINA_API_KEY=...`.
 
-2. **Apps are the canonical path.** Always check the app catalog
-   (`lamina-apps` skill) before considering atomic models or freestyle
-   recipes. Apps are human-tuned workflows.
+## Command surface
 
-3. **Inspect the parameter contract before running anything.**
-   `lamina apps get <appId>` (or `lamina models describe <id>`) returns
-   the input spec. Required fields without defaults MUST be supplied or
-   the run fails.
+### Setup & docs
 
-4. **Upload local files before passing them as inputs.**
-   `lamina assets upload <path> --json` pushes to the workspace CDN.
-   The returned URL is what you pass as a `url`-typed parameter.
+- `lamina init [--force]` — install this skill into `.claude/skills/lamina/`.
+- `lamina docs "<query>"` — search Lamina docs from the terminal.
 
-5. **Don't hang a single command for more than ~3 minutes — poll in
-   chunks instead.** `--wait` blocks until the run completes; without
-   a bounded `--timeout-ms`, a long video job can wedge the chat for
-   10+ minutes. Pick the right pattern:
+### Auth
 
-   | Expected duration | Pattern |
-   |---|---|
-   | Fast image (~10–30s) | `--wait --timeout-ms 60000` |
-   | Multi-variant image / short recipe (~30s–2min) | `--wait --timeout-ms 180000` |
-   | Video, complex recipe, or unknown (≥2min) | `--async --json` → `lamina runs wait <runId> --timeout-ms 120000` in chunks; surface progress between polls if still running |
+- `lamina login [--api-key <key>]` — browser OAuth or CI key.
+- `lamina logout` — clear stored credentials.
+- `lamina whoami` — identity + active workspace.
 
-   `--wait` and `--async` are mutually exclusive. `lamina runs wait`
-   returns either when the run reaches a terminal state OR when the
-   timeout elapses (status still pending) — read the response shape and
-   decide your next move; never blindly loop.
+### Assets
 
-6. **Webhooks are for production receivers, not for chat agents.** If
-   a default webhook URL is saved (via `lamina webhook listen
-   --public-url <url> --save-default`), it's auto-attached to every
-   `lamina run`. Override per call with `--webhook <url>`, opt out with
-   `--no-webhook`. Inspect / clear with `lamina webhook status` /
-   `lamina webhook clear`. **Chat agents typically have no receiver URL
-   — stick to `--async` + chunked polls.**
+- `lamina assets upload <path>` — upload local file → CDN URL. Cross-cutting: used by Apps (url-typed inputs), direct model dispatch (URL-typed fields in `paramSchema`), and content briefs with media.
 
-7. **One Bash tool call per `lamina` command.** Each `lamina ...`
-   invocation should be its own Bash tool call. No shell substitutions
-   (`RES=$(lamina apps list --json)`), no pipes mid-command. Read the
-   JSON response from the tool result. Prevents permission prompts in
-   Claude Code and keeps each call idempotent.
+### Apps (curated workflows)
 
-8. **Do NOT invent app IDs, model ids, or parameter names.** Every
-   appId comes from `lamina apps list`; every model id from `lamina
-   models list`; every parameter name from `lamina apps get <appId>` or
-   `lamina models describe <id>`. Guessing produces 404 / 422 errors.
+- `lamina apps list [<kw1> <kw2> ...]` — discover apps. Smart scored matcher; combine 3–6 angles (medium + form + context + subject + aspect) in one call.
+- `lamina apps get <appId>` — full input contract (`parameters` + `outputs`) for one app.
 
-9. **Brand intelligence is automatic on app runs.** Apps already pull
-   workspace brand DNA when configured. Don't inject brand context
-   manually on app runs. To inspect it, load the `lamina-intelligence`
-   skill.
+### Run + runs (polymorphic — apps + models)
 
-## Command index
+- `lamina run <appId> --input <key>=<value>` — dispatch an App.
+- `lamina runs get <runId>` — current status.
+- `lamina runs wait <runId>` — block until terminal.
+- `lamina runs cancel <runId>` — cancel queued / running (idempotent).
 
-| Command | Purpose | Specialized skill |
-|---|---|---|
-| `lamina init` | Install Lamina skills into `.claude/skills/` (run once per project; use `--force` to refresh after CLI upgrade) | — |
-| `lamina docs <query>` | Search Lamina docs from the terminal | — |
-| `lamina login` | Authenticate (browser OAuth) or `--api-key <key>` for CI | — |
-| `lamina logout` | Clear stored credentials | — |
-| `lamina whoami` | Identity + active workspace | — |
-| `lamina apps list [<keyword> ...]` | Discover apps via smart scored search | `lamina-apps` |
-| `lamina apps get <appId>` | Parameter contract for one app | `lamina-apps` |
-| `lamina assets upload <path>` | Upload local file → CDN URL | — |
-| `lamina run <appId> --input k=v --wait` | Execute an app (add `--download <template>` to save outputs) | `lamina-apps` |
-| `lamina run --recipe-file <path> ...` | Execute a freestyle recipe | `lamina-content` |
-| `lamina runs get <runId>` | Snapshot run status (polymorphic — works for any run) | — |
-| `lamina runs wait <runId>` | Block until terminal | — |
-| `lamina runs cancel <runId>` | Cancel a queued/running execution (idempotent) | — |
-| `lamina content create "<brief>"` | Brief → router picks app/recipe, drafts inputs, auto-dispatches when sufficient | `lamina-content` |
-| `lamina content plan "<brief>"` | Preview-only sibling of `create`; never dispatches | `lamina-content` |
-| `lamina models list [<kw1> ...]` | List atomic models (smart scored) | `lamina-models` |
-| `lamina models describe <id>` | Show one model's input contract (flat `paramSchema`) | `lamina-models` |
-| `lamina generate image --model <id> [--prompt "..."] [--params '<json>']` | Atomic image dispatch — one verb for every image operation | `lamina-models` |
-| `lamina generate video --model <id> [--prompt "..."] [--params '<json>']` | Atomic video dispatch — one verb for every video operation | `lamina-models` |
-| `lamina webhook status` / `clear` | Inspect / clear the saved default webhook URL | — |
-| `lamina webhook listen` | Local listener that verifies + prints deliveries | — |
-| `lamina webhook signing-key` | Public signing keys for verification | — |
-| `lamina intelligence brand-context` | Workspace brand DNA | `lamina-intelligence` |
-| `lamina intelligence predict "<concept>"` | Performance prediction | `lamina-intelligence` |
-| `lamina intelligence recommendations` | Actionable content recommendations | `lamina-intelligence` |
-| `lamina intelligence trends` | Top / emerging / declining patterns | `lamina-intelligence` |
-| `lamina mcp serve` | Run the local stdio MCP server | — |
+### Models
 
-For full options on any command: `lamina <cmd> --help`.
+- `lamina models list [--modality image|video] [--category <name>]` — list models. Filter by modality (`image` / `video`) and/or category (`text-to-image`, `image-to-image`, `text-to-video`, etc.). No keyword search.
+- `lamina models describe <id>` — flat input contract (`paramSchema`) for one model.
+- `lamina generate image --model <id> [--prompt "..."] [--params '<json>']` — every image dispatch (text-to-image, image-to-image, edit, background-remove, remix). Model id discriminates.
+- `lamina generate video --model <id> [--prompt "..."] [--params '<json>']` — every video dispatch (text-to-video, image-to-video, video-to-video, motion-control, reference-to-video, keyframe).
 
-## Auth + endpoint resolution
+### Content router
 
-The CLI resolves credentials in this order:
+- `lamina content create "<brief>"` — router picks an App, drafts inputs from the brief, auto-dispatches when sufficient. Returns `needs_input` / `needs_clarification` / `ran` / `unmatched`. Shortcut alternative to doing app search + input drafting yourself client-side.
+- `lamina content plan "<brief>"` — preview-only sibling of `create`; same routing, never dispatches. When no App fits, returns `unmatched` — agent falls back to direct model dispatch using vertical-skill knowledge.
+- `lamina content brief "<goal>"` — goal → 1+ structured content concepts (`{ title, prompt, platform, modality, format, predictedPerformance, rationale }`). Ideation, no dispatch.
+- `lamina content score [--platform <p>] [--modality <m>] [--limit <n>]` — score this workspace's published content against brand standards. Requires connected content sources (Salesforce / Shopify / social) — returns `0`s when sources aren't connected.
 
-1. `LAMINA_API_KEY` environment variable
-2. `~/.lamina/config.json` (saved by `lamina login` — supports both
-   browser OAuth tokens and CI-issued workspace API keys)
+### Brand intelligence
 
-Default endpoint is `https://app.uselamina.ai`. Override with
-`LAMINA_BASE_URL=https://...` for non-default origins (rare; mostly
-for internal staging).
+Returns what the workspace's content-intelligence layer has captured. Data is sparse for newly-onboarded workspaces, richer once brand assets (voice, palette, positioning, audience) are configured. Be honest with the user about response shape.
 
-## Output format
+- `lamina intelligence brand-context` — workspace brand DNA + active guidance + top patterns.
+- `lamina intelligence predict "<concept>"` — performance prediction for a concept idea.
+- `lamina intelligence recommendations` — actionable content recommendations.
+- `lamina intelligence trends [--window <days>]` — top / emerging / declining patterns by window.
 
-- **Default (TTY):** human-readable text — table for lists, key-value
-  for detail, multi-line for run outputs.
-- **`--json`:** structured JSON. Bare keys at top level — no `{ data:
-  ... }` envelope on `--json` output (clean for `jq`). Errors go to
-  stderr in JSON mode as `{ error, code, hint, exitCode }`.
-- **Always pipe-friendly:** errors go to stderr, data to stdout. Parse
-  stdout with `jq` without filtering noise.
+### Webhooks
 
-## Anti-drift rules (when NOT to re-call the router)
+- `lamina webhook listen` — local HTTP listener that verifies + prints incoming deliveries.
+- `lamina webhook listen --public-url <url> --save-default` — save a default forwarding URL auto-attached to every dispatch.
+- `lamina webhook status` / `clear` — inspect / clear the saved default.
+- `lamina webhook signing-key` — Ed25519 public keys for verifying payload signatures.
 
-- **Never re-call `lamina content create` or `lamina content plan` to
-  resolve `askUser` items.** The router committed to an app/recipe in
-  turn 1. Re-calling would run the LLM again and may pick a different
-  app/model — silent drift. Resolve asks via `lamina run` (deterministic).
-- **DO re-call (the same command) to resolve `needs_clarification`
-  items.** That status means the router did NOT commit yet. Ask the
-  human, fold answers into a refined brief, re-call.
-- **`unmatched` is terminal.** Brief is outside Lamina's surface —
-  rephrase or use a different tool; don't retry.
-- **Always `lamina assets upload <path>` for local file paths** before
-  passing as `--input` values. Asset params expect URLs, not paths.
-- **`lamina runs wait <runId>` is polymorphic** — works for app, recipe,
-  AND atomic generate runs. One status surface.
-- **Cancel orphaned runs** — if the user changes their mind, call
-  `lamina runs cancel <runId>`. Idempotent: already-terminal runs
-  return their current status without erroring. Don't just stop polling
-  — a queued / running execution keeps burning credits until canceled
-  or completed.
+## Using Apps
 
-## Webhooks (production receivers, dev loop, what agents should do)
+A Lamina App is a packaged production workflow for product, brand, and commerce media — ecommerce essentials, product launch campaigns, catalog photography, try-on, banners, reels, marketplace listings, multi-language adapts, and more, with new app categories added over time. Each App declares its typed inputs and outputs so the agent can read the contract and dispatch.
 
-Webhook attachment is **per-request**: every `lamina run` (and `lamina
-generate image|video`) can attach its own webhook URL.
+**Command flow:**
 
-**Production integration:**
-
-```
-lamina run <appId> --input ... \
-  --webhook https://yourapp.com/lamina-callback
+```bash
+lamina apps list                                      # find appIds
+lamina apps get <appId>                               # see parameters + outputs
+lamina assets upload <path>                           # local file -> URL
+lamina run <appId> --input <key>=<value> [--output "<label>"] --wait
 ```
 
-Or save a default once:
-
-```
-lamina webhook listen \
-  --public-url https://yourapp.com/lamina-callback \
-  --save-default
-```
-
-After that, every dispatch auto-attaches the saved URL. Override per
-call with `--webhook <other-url>`; opt out with `--no-webhook` (or
-`--webhook none`).
-
-Webhook payload shape (same for app, recipe, and atomic runs):
+**Input contract.** `lamina apps get <appId>` returns the appId, a `parameters[]` array, and an `outputs[]` array:
 
 ```json
 {
-  "runId": "...",
-  "status": "completed",   // or "failed"
-  "model": "...",          // present on atomic runs
-  "resolvedParams": { ... }, // present on atomic runs
-  "output": { "type": "image"|"video", "url": "..." },
-  "completedAt": "..."
+  "appId": "...",
+  "parameters": [
+    { "key": "product_image", "type": "url",     "accept": ["image"] },
+    { "key": "prompt",        "type": "text" },
+    { "key": "aspect_ratio",  "type": "options", "options": ["1:1","16:9","9:16"], "default": "1:1" }
+  ],
+  "outputs": [
+    { "label": "hero",      "type": "image" },
+    { "label": "lifestyle", "type": "image" }
+  ]
 }
 ```
 
-Signed with Ed25519 — verify against the workspace public key from
-`lamina webhook signing-key`.
+Field semantics:
 
-**Developer building a receiver:** `lamina webhook listen` (without
-`--save-default`) acts like `stripe listen` — local HTTP server that
-verifies signatures and prints deliveries to stdout. Pair with an
-ngrok / cloudflared tunnel so Lamina can reach your laptop.
+- `type: "text"` — free-form string.
+- `type: "url"` — URL value. `accept` lists allowed asset kinds (`image`, `video`, `audio`). Local paths must be uploaded via `lamina assets upload` first; pass the returned URL.
+- `type: "options"` — value must be one of `options[]`.
+- `default` — server uses this when `--input <key>` is omitted.
 
-**Chat agents (Claude Code, Cursor, etc.):** typically have no
-receiver URL Lamina can call back to. Stick to `--async` + bounded
-`lamina runs wait` chunks (rule 5). If a default webhook URL happens
-to be saved on the host machine, dispatches will silently attach it;
-that's fine.
+**Outputs.** When `outputs.length > 1`, subset with repeated `--output "<label>"` (exact label from the contract). Omit to return all.
 
-## What apps cover (and what they don't)
+### Featured app catalog by trending ecommerce vertical
 
-Apps are curated for the most common production workflows:
+A mental map for the most common brand use cases. Use these as a routing shortcut; for anything else, search via `lamina apps list <keywords>`. All app names verified live in the public catalog.
 
-- Selfie / portrait / try-on apps (image editing with identity preservation)
-- Cinematic / commercial / product-shot apps
-- Video reveals + image-to-video apps
-- Storytelling / multi-shot apps
-- Brand-aware variants of all of the above
+**Catalog photography** — Product Catalog (SFCC), Product Catalog for Shopify Stores, Swift Catalog 2.0, Swift Catalog 3.0, Premium Catalog 1.0, Fast Fashion Catalog App, Ethnic Wear Catalog Images, Saree Catalog, Swimsuit Catalog Images
 
-If `lamina apps list` returns nothing for a niche request, the request
-is outside Lamina's curated catalog. Two fallbacks:
+**Try-on / on-model** — Virtual Try-on, Single Garment Try-on, Double Garment Try-on, Saree Try On, Make Up Try On
 
-1. **Atomic dispatch** (load `lamina-models`) — pick a model directly
-2. **Recipe path** (load `lamina-content`) — let the router emit a
-   freestyle recipe
+**Banners + multi-aspect adaptation** — Collection Banner Maker, Multi Product Banner Maker, Multi Language Adapts, Performance Banners, Performance Ad Maker, Remarketing Ad Maker
 
-**Do NOT call fal.ai / OpenAI / Replicate / etc. directly.** The user
-asked for Lamina; either use Lamina's surface or tell them the request
-is outside the catalog.
+**Branded video + reels** — Performance Video, Product Reels (Seedance 2.0), Quick Reel Maker, Apparel Photoshoot, Product Launch Video, Combined Looks
 
-## Quick start examples
+**UGC / creator content** — UGC Maker, UGC Ads for Services
+
+**Marketplace** — A+ Content Maker
+
+**Specialty / jewelry / accessories** — Jewelry Catalog, Necklace and Earrings, Eyewear Shoot, Luxury Watch Advertisement, Room Visualizer, Add Logo or Branding, Update Product Packaging
+
+For **4 worked examples covering distinct dispatch patterns** (single-upload baseline, multi-upload with heavy subset, many curated options, async video), see `references/apps.md` — load when actually doing the dispatch work.
+
+## Using models
+
+Direct image/video generation when you know the model.
+
+**Command flow:**
 
 ```bash
-# Direct app run (you can pick the app from search)
-lamina apps list selfie celebrity --json
+lamina models list [--modality image|video]              # find model IDs
+lamina models describe <id>                              # see paramSchema
+lamina assets upload <path>                              # local file -> URL
+lamina generate image|video --model <id> --prompt "..." [--params '<json>'] --wait
+```
+
+**Input contract.** `lamina models describe <id>` returns the model id, modality, and a flat `paramSchema` keyed by field name. Each field carries its own typed shape — type, accepted values, defaults, range bounds, asset-kind constraints, etc. — described in the JSON itself. Field names and shapes vary widely by model; the agent reads whatever `paramSchema` returns and builds `--params` from it.
+
+**Two verbs, model id discriminates.** No separate verb for edit / image-to-video / motion-control — the model id picks the operation, and required URL fields come from the `paramSchema`.
+
+- **Hybrid image models** flip text-to-image / image-to-image based on whether `params.imageUrls` is provided (`nano-banana-pro`, `nano-banana-2`, `gpt-image-1`, `gpt-image-1.5`, `gpt-image-2`, `seedream-4.5`, `flux-2-flex`, `gemini-2.5-flash-image`).
+- **Vertex-backed sync models** return inline — `--wait` resolves on the first poll: `imagen-4.0-fast-generate-001`, `imagen-4.0-generate-001`, `imagen-4.0-ultra-generate-001`, `gemini-2.5-flash-image`, `veo3-text-to-video`, `veo3-image-to-video`, `veo3-first-frame-to-video`, `veo3-keyframe-to-video`.
+- **Multi-shot mode** — `multiShot: true` + `multiPrompt[]` (per-shot `prompt` + `duration`, 1–5 shots, total ≤15s) — is supported by `kling-o3-standard/pro-image-to-video` and `kling-v3-standard/pro-image-to-video`. Read each model's `paramSchema` for the exact field shape.
+
+## Using the content router
+
+A shortcut — the server already encodes App discovery + input drafting + contract understanding. One call returns everything the agent needs to dispatch (or learns there's no App match).
+
+Useful when:
+
+1. You want the server to pick the App for you instead of running your own search.
+2. You want concept ideation (`content brief`) — unique surface, no client-side equivalent.
+3. You want brand-fit scoring of already-published content (`content score`) — unique surface.
+
+**Flow:** `content plan "<brief>"` (preview) or `content create "<brief>"` (dispatches when ready) → read the response → if `status: 'plan'` or `'needs_input'`, transition to the apps flow via `lamina run`. **Never re-call content** after the router has picked — the dispatch is deterministic from there.
+
+**When no App fits.** Status comes back as `unmatched`. The router does NOT generate a freestyle recipe — that path is removed. Agent should fall back to direct model dispatch (`lamina generate image/video`) using whatever vertical-skill knowledge it has loaded for the brief's use case. For genuinely outside-the-platform briefs, surface that to the user.
+
+**`content score` data state.** Requires connected content sources (Salesforce / Shopify / social). Returns empty `scores: []` until sources are wired.
+
+For full response branching (status table + App-mode dispatch deep dive + worked examples), see `references/content-router.md`.
+
+## Brand intelligence
+
+The four `intelligence` commands return what the workspace's content-intelligence layer has captured. **Data is sparse for newly-onboarded workspaces** — `brandDna: null`, `topPatterns: []`. As the workspace ingests brand assets (voice, palette, positioning, audience), the responses get richer. Surface this honestly to the user; don't pretend the layer is fully populated when it isn't.
+
+The commands work today; the data behind them improves as the workspace matures. They're worth calling when:
+- User asks "what does Lamina know about my brand?" → `intelligence brand-context`
+- User asks "what should I post next?" → `intelligence recommendations`
+- User asks "will this concept perform well?" → `intelligence predict "<concept>"`
+- User asks "what's trending / what's working?" → `intelligence trends`
+
+## Output / auth / timeouts
+
+**Output**: TTY = human-readable; `--json` = bare JSON (no envelope). Errors → stderr in JSON mode. Force JSON in TTY with `LAMINA_OUTPUT=json`.
+
+**Timeouts** — never hang a single command for more than ~3 minutes:
+
+| Expected duration | Pattern |
+|---|---|
+| Fast image (10–30s) | `--wait --timeout-ms 60000` |
+| Multi-variant / short recipe (30s–2min) | `--wait --timeout-ms 180000` |
+| Video / unknown (≥2min) | `--async --json` → `runs wait <runId> --timeout-ms 120000` in chunks |
+
+`lamina runs wait` is polymorphic — works for App runs and direct model runs.
+
+## Webhooks (one paragraph)
+
+Per-dispatch URL attachment via `--webhook <url>`. Save a default via `lamina webhook listen --public-url <url> --save-default` and every subsequent dispatch auto-attaches it (override per-call with `--webhook <other>`; opt out with `--no-webhook`). Chat agents usually have no receiver URL — stick to `--async` + bounded `runs wait`. Payloads are signed Ed25519; verify against keys from `lamina webhook signing-key`.
+
+## Hard system constraints
+
+**Don't invent IDs.** App IDs come from `lamina apps list`. Parameter / param-schema keys come from `lamina apps get <appId>` and `lamina models describe <id>`. Model IDs come from `lamina models list`. Inventing them produces 404 / 422 errors.
+
+**Inputs decide the output.** Whether dispatching an App (`lamina run --input ...`) or a model (`lamina generate --params ...`), inputs drive what the user gets back. The agent's job is to align them with the user's need; ask when in doubt.
+
+## Quick examples
+
+```bash
+# Apps flow (direct discovery)
+lamina apps list "product catalog" sneaker ecommerce --json
 lamina apps get <appId> --json
-lamina assets upload ./me.jpg --json
+lamina assets upload ./shoe.jpg --json
 lamina run <appId> --input ... --wait --json
 
-# Free-text brief → router picks for you
-lamina content create "social hero for our SaaS launch" --json
+# Content router shortcut
+lamina content plan "social hero image for our SaaS launch" --modality image --json
+# read response → transition to apps flow
 
-# Atomic dispatch — you pick the model
+# Model dispatch — caller picks the model
 lamina models describe ideogram-v3
-lamina generate image --model ideogram-v3 --prompt "..." --wait
+lamina generate image --model ideogram-v3 --prompt "..." --wait --download ./out/
 
-# Inspect what Lamina knows about your brand
+# Concept ideation
+lamina content brief "promote summer sale" --modality image --platform Instagram --count 5 --json
+
+# Brand intelligence (sparse data when workspace isn't fully configured)
 lamina intelligence brand-context --json
 ```
 
-For full coverage of each command surface, load the matching skill:
-`lamina-apps`, `lamina-content`, `lamina-models`, or
-`lamina-intelligence`.
+## Hosted MCP (alternative to CLI)
 
-## Where to look for more
+For agent integrations that prefer typed MCP tools over CLI text, Lamina hosts an MCP endpoint at `https://app.uselamina.ai/mcp/agent` (OAuth). Install with `npx add-mcp https://app.uselamina.ai/mcp/agent` in Claude Code.
 
-- Per-command help: `lamina <cmd> --help`
-- Docs search: `lamina docs "<topic>" --json`
-- Hosted MCP integration (alternative to CLI for agents):
-  `https://app.uselamina.ai/mcp/agent` (OAuth)
-- Local MCP server: `lamina mcp serve` (stdio)
+## References
+
+Two reference files the agent loads on demand when doing actual work:
+
+- `references/apps.md` — 4 worked examples covering distinct dispatch patterns (single-upload baseline, multi-upload with heavy subset, many curated options, async video). Load when actually dispatching an App.
+- `references/content-router.md` — full response branching for `content create/plan` (`needs_input` / `needs_clarification` / `plan` / `ran` / `unmatched`), App-mode dispatching deep dive, askUser handling. Load only when actually using the content router shortcut.

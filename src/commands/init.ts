@@ -16,11 +16,8 @@
  *
  * Layout when installed:
  *   <package-root>/dist/skills/
- *       lamina/SKILL.md            ← core / foundational
- *       lamina-models/SKILL.md     ← atomic dispatch
- *       lamina-apps/SKILL.md       ← curated workflows
- *       lamina-content/SKILL.md    ← agentic routing
- *       lamina-intelligence/SKILL.md ← brand DNA / predictions
+ *       lamina/SKILL.md            ← foundational skill (all surfaces)
+ *       lamina/references/         ← deep examples (load on demand)
  *
  * Claude Code's skill loader reads `.claude/skills/<name>/SKILL.md`
  * regardless of vendor; same convention as `genmedia init`
@@ -36,24 +33,21 @@ import { printJson } from '../lib/output.js';
 
 const HELP = `Usage: lamina init [--force] [--json]
 
-Install every Lamina skill into this project's \`.claude/skills/\`
-directory. AI coding agents (Claude Code, Cursor, custom MCP clients)
-auto-load these on session start, so a fresh agent knows how to use
-Lamina's apps, brand intelligence, atomic models, and run commands
-without any further setup.
+Install the foundational Lamina skill into this project's
+\`.claude/skills/\` directory. AI coding agents (Claude Code, Cursor,
+custom MCP clients) auto-load it on session start, so a fresh agent
+knows the full Lamina CLI surface — apps discovery, model dispatch,
+content router, brand intelligence, webhooks — without any further
+setup.
 
-Skills installed:
-  lamina               foundational rules + command index (always loaded)
-  lamina-models        atomic model-pinned generate image / video
-  lamina-apps          curated app discovery + execution
-  lamina-content       agentic routing from natural-language briefs
-  lamina-intelligence  brand DNA, predictions, recommendations, trends
+The skill ships with \`references/\` for deeper material the agent
+loads on demand (worked examples, content router response branching).
 
 Run this once per project. Re-run with \`--force\` after a CLI update
 to refresh skill content.
 
 Options:
-  --force   Reinstall every skill, overwriting existing copies.
+  --force   Reinstall, overwriting existing files.
   --json    Emit a structured JSON result (for agents / scripts).
   --help, -h
 `;

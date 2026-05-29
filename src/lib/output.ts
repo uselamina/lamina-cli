@@ -562,28 +562,22 @@ export function printPublishHistory(data: PublishHistoryItem[]): void {
 }
 
 /**
- * Render a `lamina content plan` response.
+ * Pretty-print the `lamina content create` response.
  *
- * The response is always one of three terminal states:
- *   • status='plan'      mode='app'     → catalog app picked
- *   • status='plan'      mode='recipe'  → dynamic-planner recipe (no app fit)
- *   • status='unmatched'                → nothing fits
+ * Branches on `data.status` (+ `data.mode` when applicable):
+ *   • status='ran'      mode='app'     → catalog app dispatched, runId surfaced
+ *   • status='plan'     mode='app'     → catalog app selected (preview only)
+ *   • status='needs_input' mode='app'  → app picked, missing user-owned slots
+ *   • status='needs_clarification'     → router paused before committing
+ *   • status='unmatched'               → no catalog app fits / outside Lamina
  *
- * For mode='recipe', the recipe JSON is rendered and the file path where the
- * CLI saved it (for `lamina run --recipe-file <path>`) is highlighted. The
- * recipe-file save itself happens in the `handlePlan` command (output.ts is
- * just rendering).
- */
-/**
- * Pretty-print the `lamina content create` response. Mirrors
- * `printContentPlan` for the routing-decision branches (plan + asks,
- * needs_clarification, unmatched) and adds a `ran` branch for the
- * auto-dispatched path. Recipe file storage happens upstream in
- * `handleCreate`; this function just renders.
+ * Recipe-mode responses (legacy `mode='recipe'` from older server builds)
+ * are rendered as "no app match" — the calling agent should fall back to
+ * direct model dispatch (`lamina generate image|video`) using vertical-skill
+ * knowledge.
  */
 export function printContentCreateResult(
   data: LaminaCreateResult,
-  options: { recipeFile?: string } = {}
 ): void {
   if (data.status === 'unmatched') {
     process.stdout.write(`Status: unmatched\n`);
@@ -638,14 +632,13 @@ export function printContentCreateResult(
         }
       }
     } else {
-      process.stdout.write(`Mode:        recipe (${data.modality})\n`);
-      const variantCount = data.recipe?.variants?.length ?? 0;
-      process.stdout.write(`Variants:    ${variantCount}\n`);
-      if (data.picks) process.stdout.write(`Picks:       ${data.picks}\n`);
-      process.stdout.write(`Submitted:   ${data.submittedCount}/${data.numVariants}\n`);
-      if (data.failedCount > 0) {
-        process.stdout.write(`Failed:      ${data.failedCount}\n`);
-      }
+      // Legacy recipe-mode response — recipe dispatch is no longer supported
+      // through the CLI. Surface as "no app match" so the user knows to fall
+      // back to direct model dispatch.
+      process.stdout.write(`Mode:        no app match (recipe dispatch deprecated)\n`);
+      process.stdout.write(
+        `Fall back to direct model dispatch via \`lamina generate image|video --model <id>\`.\n`,
+      );
     }
 
     if (data.warnings.length > 0) {
@@ -723,48 +716,21 @@ export function printContentCreateResult(
     return;
   }
 
-  // mode === 'recipe'
-  process.stdout.write(`Mode:        recipe (${data.modality})\n`);
-  const variantCount = data.recipe?.variants?.length ?? 0;
-  process.stdout.write(`Variants:    ${variantCount}\n`);
+  // mode === 'recipe' — legacy server response. Recipe dispatch is no longer
+  // supported through the CLI. Surface as "no app match" so the agent knows
+  // to fall back to direct model dispatch.
+  process.stdout.write(`Mode:        no app match (recipe dispatch deprecated)\n`);
   if (data.recipe?.reason) {
     process.stdout.write(`Why:         ${data.recipe.reason}\n`);
   }
-  if (options.recipeFile) {
-    process.stdout.write(`Recipe file: ${options.recipeFile}\n`);
-  }
-
-  if (data.warnings.length > 0) {
-    process.stdout.write(`\nWarnings (${data.warnings.length}):\n`);
-    for (const w of data.warnings) {
-      process.stdout.write(`  ${w.field}: ${w.message}\n`);
-    }
-  }
-
-  if (data.askUser.length > 0) {
-    process.stdout.write(`\nNeed from you (${data.askUser.length}):\n`);
-    for (const item of data.askUser) {
-      process.stdout.write(`  ${item.name}: ${item.question}\n`);
-    }
-    if (options.recipeFile) {
-      process.stdout.write(
-        `\nNext: collect answers, then dispatch deterministically:\n` +
-          `  lamina run --recipe-file ${options.recipeFile} \\\n` +
-          `    --input <each asked-name>=<answer> \\\n` +
-          `    --wait --json\n`
-      );
-    }
-  } else if (options.recipeFile) {
-    process.stdout.write(
-      `\nReady to dispatch:\n` +
-        `  lamina run --recipe-file ${options.recipeFile} --wait --json\n`
-    );
-  }
+  process.stdout.write(
+    `\nFall back to direct model dispatch via \`lamina generate image|video --model <id>\`.\n` +
+      `Pick a model with \`lamina models list\` + \`lamina models describe <id>\`.\n`,
+  );
 }
 
 export function printContentPlan(
   data: ContentPlanResult,
-  options: { recipeFile?: string } = {}
 ): void {
   if (data.status === 'unmatched') {
     process.stdout.write(`Status: unmatched\n`);
@@ -864,43 +830,17 @@ export function printContentPlan(
     return;
   }
 
-  // mode === 'recipe'
-  process.stdout.write(`Mode:        recipe (${data.modality})\n`);
-  const variantCount = data.recipe?.variants?.length ?? 0;
-  process.stdout.write(`Variants:    ${variantCount}\n`);
+  // mode === 'recipe' — legacy server response. Recipe dispatch is no longer
+  // supported through the CLI. Surface as "no app match" so the agent knows
+  // to fall back to direct model dispatch.
+  process.stdout.write(`Mode:        no app match (recipe dispatch deprecated)\n`);
   if (data.recipe?.reason) {
     process.stdout.write(`Why:         ${data.recipe.reason}\n`);
   }
-  if (options.recipeFile) {
-    process.stdout.write(`Recipe file: ${options.recipeFile}\n`);
-  }
-
-  if (data.warnings.length > 0) {
-    process.stdout.write(`\nWarnings (${data.warnings.length}):\n`);
-    for (const w of data.warnings) {
-      process.stdout.write(`  ${w.field}: ${w.message}\n`);
-    }
-  }
-
-  if (data.askUser.length > 0) {
-    process.stdout.write(`\nNeed from you (${data.askUser.length}):\n`);
-    for (const item of data.askUser) {
-      process.stdout.write(`  ${item.name}: ${item.question}\n`);
-    }
-    if (options.recipeFile) {
-      process.stdout.write(
-        `\nNext: collect answers, then dispatch:\n` +
-          `  lamina run --recipe-file ${options.recipeFile} \\\n` +
-          `    --input <each asked-name>=<answer> \\\n` +
-          `    --wait --json\n`
-      );
-    }
-  } else if (options.recipeFile) {
-    process.stdout.write(
-      `\nReady to dispatch:\n` +
-        `  lamina run --recipe-file ${options.recipeFile} --wait --json\n`
-    );
-  }
+  process.stdout.write(
+    `\nFall back to direct model dispatch via \`lamina generate image|video --model <id>\`.\n` +
+      `Pick a model with \`lamina models list\` + \`lamina models describe <id>\`.\n`,
+  );
 }
 
 export function printContentScore(data: unknown): void {
@@ -986,8 +926,8 @@ CORE COMMANDS
   run           Run an app with explicit inputs
   runs          Inspect previously-started runs
   content       Plan and run from a natural-language brief
-  models        Discover atomic models — \`models list\` / \`models describe <id>\`
-  generate      Atomic model-pinned dispatch — \`generate image\` / \`generate video\`
+  models        Discover models — \`models list\` / \`models describe <id>\`
+  generate      Direct model dispatch — \`generate image\` / \`generate video\`
                 (model id discriminates: text-to-image / edit, text-to-video /
                 image-to-video / motion-control / etc. are just different models)
   webhook       Run a local listener for webhook deliveries
@@ -998,7 +938,7 @@ ADDITIONAL COMMANDS
 EXAMPLES
   $ lamina init                                   # one-time agent setup
   $ lamina login                                  # browser OAuth
-  $ lamina apps list --search selfie
+  $ lamina apps list product catalog sneaker
   $ lamina apps get e0124407-d57a-4f76-ac5a-be0041e55a24
   $ lamina assets upload ./me.jpg
   $ lamina run e0124407-d57a-4f76-ac5a-be0041e55a24 --input celebrity_text="Brad Pitt" --wait
@@ -1007,7 +947,6 @@ EXAMPLES
 
 ENVIRONMENT VARIABLES
   LAMINA_API_KEY    API key. Overrides credentials saved via \`lamina login\`.
-  LAMINA_BASE_URL   Endpoint URL. Defaults to https://app.uselamina.ai.
 
 EXIT CODES
   0   Success

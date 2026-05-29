@@ -39,7 +39,6 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.3.0",
-    "@uselamina/mcp": "0.1.0",
     "@uselamina/sdk": "file:../lamina-sdk/uselamina-sdk-0.5.7.tgz"
   },
   "scripts": {

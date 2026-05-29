@@ -48,10 +48,6 @@ Environment:
   LAMINA_API_KEY      If set, used directly without saving credentials.
                       Useful for one-off CI runs where you don't want a
                       persisted login on the runner.
-  LAMINA_BASE_URL     Advanced: point the CLI at a non-default origin
-                      (e.g. staging). Read at login time and persisted
-                      with the saved credentials. Most users should not
-                      set this.
 
 Examples:
   lamina login                          # interactive OAuth (default)

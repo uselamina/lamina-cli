@@ -11,7 +11,7 @@ import { isJsonMode } from '../lib/outputMode.js';
 
 const GROUP_HELP = `Usage: lamina models <subcommand>
 
-Discover Lamina's curated set of atomic-generate models — image and video.
+Discover Lamina's curated set of image and video generation models.
 
 Subcommands:
   list             List models (filter by --modality).
@@ -22,9 +22,10 @@ Run \`lamina models <subcommand> --help\` for subcommand options.
 
 const LIST_HELP = `Usage: lamina models list [options]
 
-List Lamina's curated atomic-generate models. Each entry is the minimum
-needed to pick a model — \`id\`, \`modality\`, \`categories\`. Call
-\`lamina models describe <id>\` next for the input contract.
+List Lamina's curated image and video generation models. Each entry
+is the minimum needed to pick a model — \`id\`, \`modality\`,
+\`categories\`. Call \`lamina models describe <id>\` next for the input
+contract.
 
 Options:
   --modality <kind>   image (default) or video.

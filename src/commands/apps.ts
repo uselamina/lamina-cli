@@ -6,8 +6,8 @@
  *   - lamina apps get   <appId>                                              [--json]
  *
  * Discovery model:
- *   - No keywords  → browse mode. Returns the workspace's apps + top public
- *                    apps (capped by --limit) via `GET /v1/apps`.
+ *   - No keywords  → browse mode. Returns the top public apps (capped by
+ *                    --limit) via `GET /v1/apps`.
  *   - 1+ keywords  → smart search. Positional keywords are joined into an
  *                    intent string and sent to `POST /v1/apps/discover`,
  *                    which runs the same `searchApps()` scorer the MCP
@@ -37,8 +37,8 @@ import { isJsonMode } from '../lib/outputMode.js';
 
 const APPS_HELP = `Usage: lamina apps <subcommand> [options]
 
-Inspect Lamina apps available in your workspace (and public apps from
-other workspaces).
+Discover Lamina's curated public apps. \`list\` searches the catalog;
+\`get\` returns one app's input contract.
 
 Subcommands:
   list   List apps with name + description
@@ -49,33 +49,30 @@ Run \`lamina apps <subcommand> --help\` for details.
 
 const LIST_HELP = `Usage: lamina apps list [<keyword> ...] [options]
 
-Find the right app for a brief. Two modes:
+Discover Lamina's curated public apps. Two modes:
 
-  Browse mode  — no keywords. Returns the workspace's apps + top public
-                 apps (capped by --limit). Use when you want to see what's
+  Browse mode  — no keywords. Returns the top public apps (capped by
+                 --limit, default 10). Use when you want to see what's
                  available.
 
   Smart search — one or more positional keywords. Routed through the same
                  scored matcher the MCP \`lamina_discover\` tool uses
                  (\`searchApps()\` server-side). Combine medium + form +
                  context for the best results, e.g.:
-                   product video reel 9:16
-                   hero banner lifestyle ecommerce
-                   selfie celebrity portrait
+                   product catalog sneaker ecommerce
+                   try-on garment apparel on-model
+                   banner swimsuit multi-language localization
 
 Options:
-  --limit <n>         Cap the result count (default 20 in search, 10 public
-                      in browse mode).
-  --public            Show only public apps (filtered client-side).
-  --private           Show only your workspace's private apps.
+  --limit <n>         Cap the result count (default 20 in search, 10 in
+                      browse mode).
   --json              Output raw JSON instead of the human-readable format.
   -h, --help          Show this help.
 
 Examples:
   lamina apps list
-  lamina apps list selfie portrait
-  lamina apps list product video reel --limit 10
-  lamina apps list "celebrity portrait" --json
+  lamina apps list "product catalog" sneaker --limit 5
+  lamina apps list "ugc maker" creator video --json
 
 Agents should pass several intent angles in one call — the matcher does
 the union + scoring. Avoid making many narrow calls with one keyword each.

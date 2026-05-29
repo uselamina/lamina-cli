@@ -13,7 +13,6 @@ import { handleInitCommand } from './commands/init.js';
 import { handleIntelligenceCommand } from './commands/intelligence.js';
 import { handleLoginCommand } from './commands/login.js';
 import { handleLogoutCommand } from './commands/logout.js';
-import { handleMcpCommand } from './commands/mcp.js';
 import { handleModelsCommand } from './commands/models.js';
 import { handlePublishingCommand } from './commands/publishing.js';
 import { handleRunCommand } from './commands/run.js';
@@ -85,7 +84,6 @@ const COMMAND_HANDLERS: Record<string, (args: string[]) => Promise<void>> = {
   run: handleRunCommand,
   runs: handleRunsCommand,
   webhook: handleWebhookCommand,
-  mcp: handleMcpCommand,
 };
 
 async function main(): Promise<void> {
