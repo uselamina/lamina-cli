@@ -78,7 +78,7 @@ Before any other command:
 
 ### Models
 
-- `lamina models list [--modality image|video] [--category <name>]` — list models. Filter by modality (`image` / `video`) and/or category (`text-to-image`, `image-to-image`, `text-to-video`, etc.). No keyword search.
+- `lamina models list [--modality image|video]` — list models. Filter by modality only (`image` / `video`). No keyword search, no category filter.
 - `lamina models describe <id>` — flat input contract (`paramSchema`) for one model.
 - `lamina generate image --model <id> [--prompt "..."] [--params '<json>']` — every image dispatch (text-to-image, image-to-image, edit, background-remove, remix). Model id discriminates.
 - `lamina generate video --model <id> [--prompt "..."] [--params '<json>']` — every video dispatch (text-to-video, image-to-video, video-to-video, motion-control, reference-to-video, keyframe).

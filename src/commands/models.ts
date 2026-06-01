@@ -29,16 +29,13 @@ contract.
 
 Options:
   --modality <kind>   image (default) or video.
-  --category <name>   Filter by category, e.g. "text-to-image",
-                      "image-to-image", "text-to-video".
   --json              Emit the raw API envelope (for piping to jq).
   --help, -h          Show this help.
 
 Examples:
   lamina models list
   lamina models list --modality video
-  lamina models list --category text-to-image
-  lamina models list --modality video --category text-to-video --json
+  lamina models list --modality video --json
 `;
 
 const DESCRIBE_HELP = `Usage: lamina models describe <id> [options]
@@ -100,7 +97,6 @@ async function handleList(args: string[]): Promise<void> {
       args,
       options: {
         modality: { type: 'string' },
-        category: { type: 'string' },
         json: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },

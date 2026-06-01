@@ -346,15 +346,11 @@ async function handleGenerateImage(args: string[]): Promise<void> {
     });
   }
 
+  // Don't hard-require --prompt here. Some models don't take a prompt at all
+  // (e.g. bria-bg-remove, sync-lipsync, ideogram-v3-reframe — paramSchema's
+  // `prompt: PROMPT_NONE`). Server-side paramSchema validation enforces
+  // required-ness per model.
   const prompt = parsed.values.prompt as string | undefined;
-  if (!prompt || prompt.trim().length === 0) {
-    throw new LaminaCliError({
-      code: 'invalid_argument',
-      exitCode: EXIT.INVALID_USAGE,
-      message: 'Missing --prompt.',
-      suggestion: 'Every text-to-image model in v1 requires a prompt.',
-    });
-  }
 
   // Build params in two passes (lower precedence → higher):
   //   1. --param k=v repeatable overrides
@@ -512,15 +508,11 @@ async function handleGenerateVideo(args: string[]): Promise<void> {
     });
   }
 
+  // Don't hard-require --prompt here. Some models don't take a prompt at all
+  // (e.g. sync-lipsync) or treat it as optional (omnihuman-v15, kling-ai-avatar,
+  // kling-v26-motion-control). Server-side paramSchema validation enforces
+  // required-ness per model.
   const prompt = parsed.values.prompt as string | undefined;
-  if (!prompt || prompt.trim().length === 0) {
-    throw new LaminaCliError({
-      code: 'invalid_argument',
-      exitCode: EXIT.INVALID_USAGE,
-      message: 'Missing --prompt.',
-      suggestion: 'Every text-to-video model in v1 requires a prompt.',
-    });
-  }
 
   const paramOverrides = parseParamFlags(parsed.values.param);
   let params: Record<string, unknown> = { ...paramOverrides };
